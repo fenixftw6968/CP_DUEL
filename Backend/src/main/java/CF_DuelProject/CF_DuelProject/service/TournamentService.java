@@ -386,6 +386,10 @@ public class TournamentService {
         return saved;
     }
 
+    public Tournament startTournament(String tournamentId, String cfHandle) {
+        return startTournament(tournamentId, cfHandle, null);
+    }
+
     // ═══════════════════════════════════════════════════════════
     // CREATE ROUND MATCHES
     // Creates MatchSecondary lobbies for each pair in the round
