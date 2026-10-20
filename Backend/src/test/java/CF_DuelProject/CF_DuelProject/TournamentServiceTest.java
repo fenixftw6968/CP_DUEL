@@ -194,7 +194,7 @@ class TournamentServiceTest {
         assertThrows(ResponseStatusException.class, () -> service.acceptJoinRequest("t1", "bob", "charlie"));
 
         // Alice (organizer/referee) accepts Bob
-        service.acceptJoinRequest("t1", "bob", "alice");
+        service.acceptJoinRequest("t1", "alice", "bob");
         assertTrue(t.getRegisteredPlayers().contains("bob"));
         assertTrue(!t.getJoinRequests().contains("bob"));
     }

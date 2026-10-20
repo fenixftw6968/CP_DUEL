@@ -743,8 +743,11 @@ public class MatchService {
         String handle = user.getCfHandle();
         if (handle != null && !handle.isBlank() && isPlayer(handle, p1, p2)) return true;
         if (tournamentId != null) {
-            // Tournament matches can be monitored by host referee and viewed by spectators
-            return true;
+            CF_DuelProject.CF_DuelProject.model.Tournament t = tournamentRepository.findById(tournamentId).orElse(null);
+            if (t != null) {
+                if (t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(email)) return true;
+                if (handle != null && t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(handle)) return true;
+            }
         }
         return false;
     }

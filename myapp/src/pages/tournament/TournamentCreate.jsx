@@ -122,8 +122,12 @@ export default function TournamentCreate() {
       const res = await axiosInstance.post(API_PATHS.TOURNAMENT.CREATE, payload)
       showToast('Tournament created!')
 
-      // Navigate to tournament bracket page
-      setTimeout(() => navigate(`/tournament/${res.data.id}`), 500)
+      const tourneyId = res.data?.id || res.data?._id || res.data?.tournament?.id
+      if (tourneyId) {
+        setTimeout(() => navigate(`/tournament/${tourneyId}`), 400)
+      } else {
+        setTimeout(() => navigate('/tournaments'), 400)
+      }
     } catch (err) {
       const msg = err?.response?.data?.message || err?.response?.data || 'Failed to create tournament.'
       setError(typeof msg === 'string' ? msg : JSON.stringify(msg))

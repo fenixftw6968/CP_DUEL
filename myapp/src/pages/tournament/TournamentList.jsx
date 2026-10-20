@@ -1,9 +1,20 @@
-import { useEffect, useState, useContext } from 'react'
+import { useEffect, useState, useContext, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axiosInstance from '../../utils/axiosInstance'
 import { API_PATHS } from '../../utils/apiPaths'
 import { AuthContext } from '../../context/AuthContext'
 import Navbar from '../../components/Navbar'
+
+function decodeToken(token) {
+  if (!token) return null
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=')
+    return JSON.parse(atob(padded))
+  } catch { return null }
+}
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Bebas+Neue&display=swap');
@@ -73,12 +84,15 @@ const css = `
 export default function TournamentList() {
   const navigate = useNavigate()
   const { userToken } = useContext(AuthContext)
+  const token = localStorage.getItem('token') || userToken
+  const claims = useMemo(() => decodeToken(token), [token])
+  const userEmail = claims?.sub || ''
 
   const [tab, setTab] = useState('active')
   const [tournaments, setTournaments] = useState([])
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
-  const [myCfHandle, setMyCfHandle] = useState('')
+  const [myCfHandle, setMyCfHandle] = useState(localStorage.getItem('cfHandle') || '')
 
   const showToast = (text, type = 'ok') => {
     setToast({ text, type })
@@ -87,15 +101,18 @@ export default function TournamentList() {
 
   // Fetch user info
   useEffect(() => {
-    if (!userToken) return
     axiosInstance.get(API_PATHS.USER.ME)
-      .then(res => { if (res.data?.cfHandle) setMyCfHandle(res.data.cfHandle) })
+      .then(res => {
+        const handle = res.data?.codeforcesHandle || res.data?.cfHandle || ''
+        if (handle) {
+          setMyCfHandle(handle)
+          localStorage.setItem('cfHandle', handle)
+        }
+      })
       .catch(() => {})
-  }, [userToken])
+  }, [])
 
-  // Fetch tournaments based on tab
-  useEffect(() => {
-    setLoading(true)
+  const fetchTournaments = () => {
     const url = tab === 'my'
       ? API_PATHS.TOURNAMENT.MY
       : API_PATHS.TOURNAMENT.ACTIVE
@@ -104,15 +121,22 @@ export default function TournamentList() {
       .then(res => setTournaments(res.data || []))
       .catch(() => setTournaments([]))
       .finally(() => setLoading(false))
+  }
+
+  // Fetch tournaments based on tab and poll
+  useEffect(() => {
+    setLoading(true)
+    fetchTournaments()
+
+    const interval = setInterval(fetchTournaments, 4000)
+    return () => clearInterval(interval)
   }, [tab])
 
   const onRequestJoin = async (id) => {
     try {
       await axiosInstance.post(API_PATHS.TOURNAMENT.REQUEST_JOIN(id))
       showToast('Join request sent!')
-      const url = tab === 'my' ? API_PATHS.TOURNAMENT.MY : API_PATHS.TOURNAMENT.ACTIVE
-      const res = await axiosInstance.get(url)
-      setTournaments(res.data || [])
+      fetchTournaments()
     } catch (err) {
       const msg = err?.response?.data?.message || err?.response?.data || 'Failed to request join.'
       showToast(typeof msg === 'string' ? msg : 'Failed.', 'error')
@@ -123,9 +147,7 @@ export default function TournamentList() {
     try {
       await axiosInstance.post(API_PATHS.TOURNAMENT.CANCEL_REQUEST(id))
       showToast('Join request cancelled.')
-      const url = tab === 'my' ? API_PATHS.TOURNAMENT.MY : API_PATHS.TOURNAMENT.ACTIVE
-      const res = await axiosInstance.get(url)
-      setTournaments(res.data || [])
+      fetchTournaments()
     } catch (err) {
       const msg = err?.response?.data?.message || err?.response?.data || 'Failed to cancel request.'
       showToast(typeof msg === 'string' ? msg : 'Failed.', 'error')
@@ -136,9 +158,7 @@ export default function TournamentList() {
     try {
       await axiosInstance.post(`${API_PATHS.TOURNAMENT.UNREGISTER}/${id}/unregister`)
       showToast('Left tournament.')
-      const url = tab === 'my' ? API_PATHS.TOURNAMENT.MY : API_PATHS.TOURNAMENT.ACTIVE
-      const res = await axiosInstance.get(url)
-      setTournaments(res.data || [])
+      fetchTournaments()
     } catch (err) {
       const msg = err?.response?.data?.message || err?.response?.data || 'Failed.'
       showToast(typeof msg === 'string' ? msg : 'Failed.', 'error')
@@ -160,7 +180,14 @@ export default function TournamentList() {
 
   const isRegistered = (t) => t.registeredPlayers?.includes(myCfHandle)
   const hasRequested = (t) => t.joinRequests?.includes(myCfHandle)
-  const isCreator = (t) => t.creatorId && myCfHandle && t.creatorId.toLowerCase() === myCfHandle.toLowerCase()
+  const isCreator = (t) => {
+    if (!t) return false
+    const email = userEmail?.trim().toLowerCase()
+    const handle = (myCfHandle || localStorage.getItem('cfHandle') || '').trim().toLowerCase()
+    if (t.creatorEmail && email && t.creatorEmail.trim().toLowerCase() === email) return true
+    if (t.creatorId && handle && t.creatorId.trim().toLowerCase() === handle) return true
+    return false
+  }
   const isFull = (t) => (t.registeredPlayers?.length || 0) >= t.maxPlayers
 
   const getRoundLabel = (round, total) => {

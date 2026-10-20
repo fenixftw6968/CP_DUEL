@@ -50,10 +50,39 @@ public class TournamentService {
         messagingTemplate.convertAndSend("/topic/tournament/" + t.getId(), t);
     }
 
+    // ─── Host Authorization Helper ───
+    public boolean isHost(Tournament t, String cfHandle, String email) {
+        if (t == null) return false;
+        if (cfHandle != null && !cfHandle.isBlank() && t.getCreatorId() != null
+                && cfHandle.trim().equalsIgnoreCase(t.getCreatorId().trim())) {
+            return true;
+        }
+        if (email != null && !email.isBlank() && t.getCreatorEmail() != null
+                && email.trim().equalsIgnoreCase(t.getCreatorEmail().trim())) {
+            return true;
+        }
+        return false;
+    }
+
+    private void populateCreatorEmailIfMissing(Tournament t) {
+        if (t != null && (t.getCreatorEmail() == null || t.getCreatorEmail().isBlank()) && t.getCreatorId() != null) {
+            try {
+                userRepository.findByCodeforcesHandleIgnoreCase(t.getCreatorId())
+                        .or(() -> userRepository.findByCfHandleIgnoreCase(t.getCreatorId()))
+                        .ifPresent(u -> {
+                            t.setCreatorEmail(u.getEmail());
+                            tournamentRepository.save(t);
+                        });
+            } catch (Exception e) {
+                log.debug("Could not backfill creator email: {}", e.getMessage());
+            }
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════
     // CREATE TOURNAMENT
     // ═══════════════════════════════════════════════════════════
-    public Tournament createTournament(String creatorCfHandle, String name, int maxPlayers,
+    public Tournament createTournament(String creatorCfHandle, String creatorEmail, String name, int maxPlayers,
             String difficulty, int matchDurationMinutes) {
 
         // Validate maxPlayers is power of 2
@@ -66,6 +95,7 @@ public class TournamentService {
         Tournament t = new Tournament();
         t.setName(name);
         t.setCreatorId(creatorCfHandle);
+        t.setCreatorEmail(creatorEmail);
         t.setDifficulty(difficulty);
         t.setMaxPlayers(maxPlayers);
         t.setMatchDurationMinutes(matchDurationMinutes);
@@ -82,18 +112,17 @@ public class TournamentService {
         return tournamentRepository.save(t);
     }
 
+    public Tournament createTournament(String creatorCfHandle, String name, int maxPlayers,
+            String difficulty, int matchDurationMinutes) {
+        return createTournament(creatorCfHandle, null, name, maxPlayers, difficulty, matchDurationMinutes);
+    }
+
     // ═══════════════════════════════════════════════════════════
     // JOIN REQUEST (Players must send join request; host cannot play)
     // ═══════════════════════════════════════════════════════════
     public Tournament requestToJoin(String tournamentId, String cfHandle) {
         if (cfHandle == null || cfHandle.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid Codeforces handle");
-        }
-
-        User user = userRepository.findByCodeforcesHandleIgnoreCase(cfHandle)
-                .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(cfHandle).orElse(null));
-        if (user == null || !user.isCfVerified()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Please verify your Codeforces account before requesting to join.");
         }
 
         Tournament t = tournamentRepository.findById(tournamentId)
@@ -105,6 +134,12 @@ public class TournamentService {
 
         if (cfHandle.equalsIgnoreCase(t.getCreatorId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The tournament creator is the referee and cannot join as a player.");
+        }
+
+        User user = userRepository.findByCodeforcesHandleIgnoreCase(cfHandle)
+                .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(cfHandle).orElse(null));
+        if (user != null && !user.isCfVerified()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Please verify your Codeforces account before requesting to join.");
         }
 
         if (t.getRegisteredPlayers().contains(cfHandle)) {
@@ -147,11 +182,13 @@ public class TournamentService {
     // ═══════════════════════════════════════════════════════════
     // ACCEPT JOIN REQUEST (Host only)
     // ═══════════════════════════════════════════════════════════
-    public Tournament acceptJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+    public Tournament acceptJoinRequest(String tournamentId, String hostCfHandle, String hostEmail, String playerCfHandle) {
         Tournament t = tournamentRepository.findById(tournamentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
 
-        if (!hostCfHandle.equalsIgnoreCase(t.getCreatorId())) {
+        populateCreatorEmailIfMissing(t);
+
+        if (!isHost(t, hostCfHandle, hostEmail)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the host referee can accept join requests.");
         }
 
@@ -179,14 +216,20 @@ public class TournamentService {
         return saved;
     }
 
+    public Tournament acceptJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+        return acceptJoinRequest(tournamentId, hostCfHandle, null, playerCfHandle);
+    }
+
     // ═══════════════════════════════════════════════════════════
     // DECLINE JOIN REQUEST (Host only)
     // ═══════════════════════════════════════════════════════════
-    public Tournament declineJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+    public Tournament declineJoinRequest(String tournamentId, String hostCfHandle, String hostEmail, String playerCfHandle) {
         Tournament t = tournamentRepository.findById(tournamentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
 
-        if (!hostCfHandle.equalsIgnoreCase(t.getCreatorId())) {
+        populateCreatorEmailIfMissing(t);
+
+        if (!isHost(t, hostCfHandle, hostEmail)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the host referee can decline join requests.");
         }
 
@@ -196,6 +239,10 @@ public class TournamentService {
         Tournament saved = tournamentRepository.save(t);
         publishTournamentUpdate(saved);
         return saved;
+    }
+
+    public Tournament declineJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+        return declineJoinRequest(tournamentId, hostCfHandle, null, playerCfHandle);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -232,11 +279,13 @@ public class TournamentService {
     // ═══════════════════════════════════════════════════════════
     // START ROUND MATCHES MANUALLY (Creator only)
     // ═══════════════════════════════════════════════════════════
-    public Tournament startRoundMatchesManual(String tournamentId, String cfHandle, int round, MatchService matchService) {
+    public Tournament startRoundMatchesManual(String tournamentId, String cfHandle, String email, int round, MatchService matchService) {
         Tournament t = tournamentRepository.findById(tournamentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
 
-        if (!cfHandle.equals(t.getCreatorId())) {
+        populateCreatorEmailIfMissing(t);
+
+        if (!isHost(t, cfHandle, email)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the creator can start rounds");
         }
 
@@ -261,14 +310,20 @@ public class TournamentService {
         return t;
     }
 
+    public Tournament startRoundMatchesManual(String tournamentId, String cfHandle, int round, MatchService matchService) {
+        return startRoundMatchesManual(tournamentId, cfHandle, null, round, matchService);
+    }
+
     // ═══════════════════════════════════════════════════════════
     // START TOURNAMENT (Creator only)
     // ═══════════════════════════════════════════════════════════
-    public Tournament startTournament(String tournamentId, String cfHandle) {
+    public Tournament startTournament(String tournamentId, String cfHandle, String email) {
         Tournament t = tournamentRepository.findById(tournamentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
 
-        if (!cfHandle.equals(t.getCreatorId())) {
+        populateCreatorEmailIfMissing(t);
+
+        if (!isHost(t, cfHandle, email)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only creator can start the tournament");
         }
 
@@ -467,11 +522,13 @@ public class TournamentService {
         publishTournamentUpdate(t);
     }
 
-    public Tournament advanceRoundManual(String tournamentId, String cfHandle) {
+    public Tournament advanceRoundManual(String tournamentId, String cfHandle, String email) {
         Tournament t = tournamentRepository.findById(tournamentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
 
-        if (!cfHandle.equals(t.getCreatorId())) {
+        populateCreatorEmailIfMissing(t);
+
+        if (!isHost(t, cfHandle, email)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the creator can advance the round");
         }
 
@@ -500,6 +557,10 @@ public class TournamentService {
         }
         publishTournamentUpdate(t);
         return t;
+    }
+
+    public Tournament advanceRoundManual(String tournamentId, String cfHandle) {
+        return advanceRoundManual(tournamentId, cfHandle, null);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -607,23 +668,44 @@ public class TournamentService {
     // ═══════════════════════════════════════════════════════════
 
     public Tournament getTournamentById(String id) {
-        return tournamentRepository.findById(id)
+        Tournament t = tournamentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
+        populateCreatorEmailIfMissing(t);
+        return t;
     }
 
     public List<Tournament> getActiveTournaments() {
-        return tournamentRepository.findByStatusIn(List.of("REGISTRATION", "ONGOING"));
+        List<Tournament> list = tournamentRepository.findByStatusIn(List.of("REGISTRATION", "ONGOING"));
+        list.forEach(this::populateCreatorEmailIfMissing);
+        return list;
     }
-
-
 
     public MatchSecondary getSecondaryMatch(String inviteCode) {
         return matchRepository2.findByInviteCode(inviteCode).orElse(null);
     }
 
+    public List<Tournament> getMyTournaments(String cfHandle, String email) {
+        List<Tournament> list = new ArrayList<>();
+        if (cfHandle != null && !cfHandle.isBlank()) {
+            list.addAll(tournamentRepository.findByRegisteredPlayersContainingOrCreatorId(cfHandle, cfHandle));
+        }
+        if (email != null && !email.isBlank()) {
+            List<Tournament> byEmail = tournamentRepository.findByRegisteredPlayersContainingOrCreatorIdOrCreatorEmail(
+                    cfHandle != null ? cfHandle : "",
+                    cfHandle != null ? cfHandle : "",
+                    email);
+            for (Tournament t : byEmail) {
+                if (list.stream().noneMatch(existing -> existing.getId().equals(t.getId()))) {
+                    list.add(t);
+                }
+            }
+        }
+        list.forEach(this::populateCreatorEmailIfMissing);
+        return list;
+    }
+
     public List<Tournament> getMyTournaments(String cfHandle) {
-        if (cfHandle == null || cfHandle.isBlank()) return List.of();
-        return tournamentRepository.findByRegisteredPlayersContainingOrCreatorId(cfHandle, cfHandle);
+        return getMyTournaments(cfHandle, null);
     }
 
     // Get match data for a specific tournament round (for bracket display)

@@ -108,7 +108,11 @@ export default function Navbar({ onCfSaved }) {
     setTimeout(() => setToast(null), 3000)
   }
 
-  const onLogout = () => { logout(); navigate('/login', { replace: true }) }
+  const onLogout = () => {
+    localStorage.removeItem('cfHandle')
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   const loadUserInfo = async () => {
     try {
@@ -117,6 +121,9 @@ export default function Navbar({ onCfSaved }) {
         setUserInfo(res.data)
         const currentHandle = res.data.codeforcesHandle || res.data.cfHandle || ''
         setCfInput(currentHandle)
+        if (currentHandle) {
+          localStorage.setItem('cfHandle', currentHandle)
+        }
         return res.data
       }
     } catch { /* ignore */ }

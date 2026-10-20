@@ -25,6 +25,7 @@ public class Tournament {
 
     private String name;                         // "Weekend Blitz Cup"
     private String creatorId;                    // cfHandle of creator
+    private String creatorEmail;                 // email of creator
     private String difficulty;                   // "EASY", "MEDIUM", or "HARD"
     private int maxPlayers;                      // 8, 16, 32
     private int matchDurationMinutes;            // per match

@@ -63,7 +63,7 @@ public class TournamentController {
 
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
         return tournamentService.createTournament(
-                cfHandle, req.name, req.maxPlayers,
+                cfHandle, email, req.name, req.maxPlayers,
                 req.difficulty, req.matchDurationMinutes);
     }
 
@@ -107,7 +107,7 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
 
-        return tournamentService.acceptJoinRequest(id, cfHandle, playerHandle);
+        return tournamentService.acceptJoinRequest(id, cfHandle, email, playerHandle);
     }
 
     // ✅ Decline Player Join Request (Host only)
@@ -119,7 +119,7 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
 
-        return tournamentService.declineJoinRequest(id, cfHandle, playerHandle);
+        return tournamentService.declineJoinRequest(id, cfHandle, email, playerHandle);
     }
 
     // ✅ Register for Tournament (backward compatibility)
@@ -151,7 +151,7 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
 
-        return tournamentService.startTournament(id, cfHandle);
+        return tournamentService.startTournament(id, cfHandle, email);
     }
 
     // ✅ Start Round Matches Manually (Creator only)
@@ -162,7 +162,7 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
 
-        return tournamentService.startRoundMatchesManual(id, cfHandle, round, matchService);
+        return tournamentService.startRoundMatchesManual(id, cfHandle, email, round, matchService);
     }
 
     // ✅ Advance Round Manually (Creator only)
@@ -173,7 +173,7 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getVerifiedCfHandleByEmail(email);
 
-        return tournamentService.advanceRoundManual(id, cfHandle);
+        return tournamentService.advanceRoundManual(id, cfHandle, email);
     }
 
     // ✅ Get Tournament Details
@@ -200,6 +200,6 @@ public class TournamentController {
         String email = (String) authentication.getPrincipal();
         String cfHandle = userService.getCfHandleByEmail(email);
 
-        return tournamentService.getMyTournaments(cfHandle);
+        return tournamentService.getMyTournaments(cfHandle, email);
     }
 }

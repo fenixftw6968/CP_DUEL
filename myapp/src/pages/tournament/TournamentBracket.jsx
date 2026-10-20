@@ -1,11 +1,20 @@
-import { useEffect, useState, useContext, useRef } from 'react'
+import { useEffect, useState, useContext, useRef, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import axiosInstance from '../../utils/axiosInstance'
 import { API_PATHS } from '../../utils/apiPaths'
 import { AuthContext } from '../../context/AuthContext'
 import Navbar from '../../components/Navbar'
 
-const WS_BASE = import.meta.env.VITE_WS_URL || 'http://localhost:8080'
+function decodeToken(token) {
+  if (!token) return null
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=')
+    return JSON.parse(atob(padded))
+  } catch { return null }
+}
 
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Bebas+Neue&display=swap');
@@ -110,11 +119,14 @@ export default function TournamentBracket() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { userToken } = useContext(AuthContext)
+  const token = localStorage.getItem('token') || userToken
+  const claims = useMemo(() => decodeToken(token), [token])
+  const userEmail = claims?.sub || ''
 
   const [tData, setTData] = useState(null)
   const [rounds, setRounds] = useState({})
   const [loading, setLoading] = useState(true)
-  const [myHandle, setMyHandle] = useState('')
+  const [myHandle, setMyHandle] = useState(localStorage.getItem('cfHandle') || '')
   const [startingRound, setStartingRound] = useState(false)
   const [startingTournament, setStartingTournament] = useState(false)
   const [toast, setToast] = useState(null)
@@ -124,6 +136,12 @@ export default function TournamentBracket() {
   const showToast = (text, type = 'ok') => {
     setToast({ text, type })
     setTimeout(() => setToast(null), 3000)
+  }
+
+  const getWsUrl = () => {
+    if (import.meta.env.VITE_WS_URL) return `${import.meta.env.VITE_WS_URL}/ws`
+    const proto = window.location.protocol === 'https:' ? 'https:' : 'http:'
+    return `${proto}//${window.location.host}/ws`
   }
 
   const startRound = async (round) => {
@@ -188,17 +206,22 @@ export default function TournamentBracket() {
   }
 
   useEffect(() => {
-    if (!userToken) return
     axiosInstance.get(API_PATHS.USER.ME)
-      .then(res => { if (res.data?.cfHandle) setMyHandle(res.data.cfHandle) })
+      .then(res => {
+        const handle = res.data?.codeforcesHandle || res.data?.cfHandle || ''
+        if (handle) {
+          setMyHandle(handle)
+          localStorage.setItem('cfHandle', handle)
+        }
+      })
       .catch(() => {})
-  }, [userToken])
+  }, [])
 
   const fetchBracket = () => {
     axiosInstance.get(`${API_PATHS.TOURNAMENT.BRACKET}/${id}/bracket`)
       .then(res => {
-        setTData(res.data.tournament)
-        setRounds(res.data.rounds || {})
+        setTData(res.data?.tournament || null)
+        setRounds(res.data?.rounds || {})
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -207,42 +230,75 @@ export default function TournamentBracket() {
   useEffect(() => {
     fetchBracket()
     
-    // Set up Stomp websocket connection to get live updates when matches finish or tournament starts
+    // Set up Stomp websocket connection to get live updates
     if (window.SockJS && window.Stomp) {
-      const sock = new window.SockJS(`${WS_BASE}/ws`)
-      const client = window.Stomp.over(sock)
-      client.debug = null
-      client.connect({}, () => {
-        client.subscribe(`/topic/tournament/${id}`, () => {
-          fetchBracket()
-        })
-      })
-      wsRef.current = client
+      try {
+        const wsUrl = getWsUrl()
+        const sock = new window.SockJS(wsUrl)
+        const client = window.Stomp.over(sock)
+        client.debug = () => {}
+        const curToken = localStorage.getItem('token')
+        const headers = curToken ? { Authorization: `Bearer ${curToken}` } : {}
+        client.connect(headers, () => {
+          client.subscribe(`/topic/tournament/${id}`, () => {
+            fetchBracket()
+          })
+        }, () => {})
+        wsRef.current = client
+      } catch (e) {
+        // Fallback to polling
+      }
     }
     
+    // Periodic poll so join requests and match results update automatically even if WS drops
+    const interval = setInterval(() => {
+      fetchBracket()
+    }, 3500)
+
     return () => {
-      if (wsRef.current) wsRef.current.disconnect()
+      clearInterval(interval)
+      if (wsRef.current) {
+        try { wsRef.current.disconnect() } catch (e) {}
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   if (loading) {
     return (
-      <div className="tb" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        Loading bracket...
-      </div>
+      <>
+        <style>{css}</style>
+        <div className="tb">
+          <Navbar />
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888', fontSize: '13px' }}>
+            Loading tournament arena...
+          </div>
+        </div>
+      </>
     )
   }
 
   if (!tData) {
     return (
-      <div className="tb" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        Tournament not found.
-      </div>
+      <>
+        <style>{css}</style>
+        <div className="tb">
+          <Navbar />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+            <div style={{ color: '#ff6666', fontSize: '14px' }}>Tournament not found.</div>
+            <button className="tb-play-btn" onClick={() => navigate('/tournaments')}>
+              Back to Tournaments
+            </button>
+          </div>
+        </div>
+      </>
     )
   }
 
-  const isReferee = myHandle && tData.creatorId && myHandle.toLowerCase() === tData.creatorId.toLowerCase()
+  const isReferee = Boolean(
+    (tData.creatorEmail && userEmail && tData.creatorEmail.trim().toLowerCase() === userEmail.trim().toLowerCase()) ||
+    (tData.creatorId && myHandle && tData.creatorId.trim().toLowerCase() === myHandle.trim().toLowerCase())
+  )
   const isMyMatch = (m) => myHandle && (m.player1 === myHandle || m.player2 === myHandle)
 
   const getRoundName = (roundNum) => {
