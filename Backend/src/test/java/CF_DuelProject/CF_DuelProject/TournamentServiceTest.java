@@ -167,7 +167,7 @@ class TournamentServiceTest {
         when(tournaments.findById("t1")).thenReturn(Optional.of(t));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.registerForTournament("t1", "alice"));
+                () -> service.registerPlayer("t1", "alice"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
         assertTrue(ex.getReason().contains("referee"));
     }
