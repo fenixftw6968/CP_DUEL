@@ -75,27 +75,25 @@ public class TournamentService {
         t.setTotalRounds(totalRounds);
         t.setCurrentRound(0);
 
-        // Auto-register creator
-        List<String> players = new ArrayList<>();
-        players.add(creatorCfHandle);
-        t.setRegisteredPlayers(players);
+        // Host is referee and does NOT participate as a player
+        t.setRegisteredPlayers(new ArrayList<>());
+        t.setJoinRequests(new ArrayList<>());
 
         return tournamentRepository.save(t);
     }
 
     // ═══════════════════════════════════════════════════════════
-    // REGISTER PLAYER
+    // JOIN REQUEST (Players must send join request; host cannot play)
     // ═══════════════════════════════════════════════════════════
-    public Tournament registerPlayer(String tournamentId, String cfHandle) {
+    public Tournament requestToJoin(String tournamentId, String cfHandle) {
         if (cfHandle == null || cfHandle.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid Codeforces handle");
         }
 
-        // ✅ REQUIREMENT: Tournament registration must check cfVerified == true
         User user = userRepository.findByCodeforcesHandleIgnoreCase(cfHandle)
                 .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(cfHandle).orElse(null));
         if (user == null || !user.isCfVerified()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Please verify your Codeforces account before registering for a tournament.");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Please verify your Codeforces account before requesting to join.");
         }
 
         Tournament t = tournamentRepository.findById(tournamentId)
@@ -105,22 +103,110 @@ public class TournamentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Registration is closed");
         }
 
+        if (cfHandle.equalsIgnoreCase(t.getCreatorId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The tournament creator is the referee and cannot join as a player.");
+        }
+
         if (t.getRegisteredPlayers().contains(cfHandle)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Already registered");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Already an accepted player in this tournament.");
+        }
+
+        if (t.getJoinRequests() == null) {
+            t.setJoinRequests(new ArrayList<>());
+        }
+
+        if (t.getJoinRequests().contains(cfHandle)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Join request already sent.");
         }
 
         if (t.getRegisteredPlayers().size() >= t.getMaxPlayers()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tournament is full");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tournament is full.");
         }
 
-        t.getRegisteredPlayers().add(cfHandle);
+        t.getJoinRequests().add(cfHandle);
         Tournament saved = tournamentRepository.save(t);
         publishTournamentUpdate(saved);
         return saved;
     }
 
     // ═══════════════════════════════════════════════════════════
-    // UNREGISTER PLAYER
+    // CANCEL JOIN REQUEST (Player cancels their own pending request)
+    // ═══════════════════════════════════════════════════════════
+    public Tournament cancelJoinRequest(String tournamentId, String cfHandle) {
+        Tournament t = tournamentRepository.findById(tournamentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
+
+        if (t.getJoinRequests() != null) {
+            t.getJoinRequests().remove(cfHandle);
+        }
+        Tournament saved = tournamentRepository.save(t);
+        publishTournamentUpdate(saved);
+        return saved;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ACCEPT JOIN REQUEST (Host only)
+    // ═══════════════════════════════════════════════════════════
+    public Tournament acceptJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+        Tournament t = tournamentRepository.findById(tournamentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
+
+        if (!hostCfHandle.equalsIgnoreCase(t.getCreatorId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the host referee can accept join requests.");
+        }
+
+        if (!"REGISTRATION".equals(t.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tournament registration is closed.");
+        }
+
+        if (t.getJoinRequests() == null || !t.getJoinRequests().contains(playerCfHandle)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Join request not found for player: " + playerCfHandle);
+        }
+
+        if (t.getRegisteredPlayers().contains(playerCfHandle)) {
+            t.getJoinRequests().remove(playerCfHandle);
+            return tournamentRepository.save(t);
+        }
+
+        if (t.getRegisteredPlayers().size() >= t.getMaxPlayers()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tournament is already full.");
+        }
+
+        t.getJoinRequests().remove(playerCfHandle);
+        t.getRegisteredPlayers().add(playerCfHandle);
+        Tournament saved = tournamentRepository.save(t);
+        publishTournamentUpdate(saved);
+        return saved;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // DECLINE JOIN REQUEST (Host only)
+    // ═══════════════════════════════════════════════════════════
+    public Tournament declineJoinRequest(String tournamentId, String hostCfHandle, String playerCfHandle) {
+        Tournament t = tournamentRepository.findById(tournamentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tournament not found"));
+
+        if (!hostCfHandle.equalsIgnoreCase(t.getCreatorId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only the host referee can decline join requests.");
+        }
+
+        if (t.getJoinRequests() != null) {
+            t.getJoinRequests().remove(playerCfHandle);
+        }
+        Tournament saved = tournamentRepository.save(t);
+        publishTournamentUpdate(saved);
+        return saved;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // REGISTER PLAYER (Backward compatible - delegates to requestToJoin or auto-accepts if disabled)
+    // ═══════════════════════════════════════════════════════════
+    public Tournament registerPlayer(String tournamentId, String cfHandle) {
+        return requestToJoin(tournamentId, cfHandle);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // UNREGISTER / LEAVE PLAYER
     // ═══════════════════════════════════════════════════════════
     public Tournament unregisterPlayer(String tournamentId, String cfHandle) {
         Tournament t = tournamentRepository.findById(tournamentId)
@@ -130,10 +216,13 @@ public class TournamentService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot unregister after tournament starts");
         }
 
-        if (cfHandle.equals(t.getCreatorId())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Creator cannot unregister");
+        if (cfHandle.equalsIgnoreCase(t.getCreatorId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Creator is the referee and cannot register/unregister as a player");
         }
 
+        if (t.getJoinRequests() != null) {
+            t.getJoinRequests().remove(cfHandle);
+        }
         t.getRegisteredPlayers().remove(cfHandle);
         Tournament saved = tournamentRepository.save(t);
         publishTournamentUpdate(saved);
@@ -533,7 +622,8 @@ public class TournamentService {
     }
 
     public List<Tournament> getMyTournaments(String cfHandle) {
-        return tournamentRepository.findByRegisteredPlayersContaining(cfHandle);
+        if (cfHandle == null || cfHandle.isBlank()) return List.of();
+        return tournamentRepository.findByRegisteredPlayersContainingOrCreatorId(cfHandle, cfHandle);
     }
 
     // Get match data for a specific tournament round (for bracket display)

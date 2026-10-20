@@ -31,6 +31,10 @@ export const API_PATHS = {
     DETAILS: '/api/tournament',       // + /{id}
     REGISTER: '/api/tournament',      // + /{id}/register
     UNREGISTER: '/api/tournament',    // + /{id}/unregister
+    REQUEST_JOIN: (id) => `/api/tournament/${id}/join-request`,
+    CANCEL_REQUEST: (id) => `/api/tournament/${id}/join-request/cancel`,
+    ACCEPT_REQUEST: (id, player) => `/api/tournament/${id}/accept-request?playerHandle=${encodeURIComponent(player)}`,
+    DECLINE_REQUEST: (id, player) => `/api/tournament/${id}/decline-request?playerHandle=${encodeURIComponent(player)}`,
     START: '/api/tournament',         // + /{id}/start
     BRACKET: '/api/tournament',       // + /{id}/bracket
 

@@ -695,11 +695,13 @@ export default function MatchRoom() {
   useEffect(() => { if (chatOpen) setUnreadCount(0) }, [chatOpen])
 
   // ── Send chat message ─────────────────────────────────────
+  // ── Send chat message ─────────────────────────────────────
   const sendChat = () => {
     const text = chatInput.trim()
     if (!text || !wsRef.current) return
+    const normCode = (inviteCode || '').trim().toUpperCase()
     wsRef.current.send('/app/match/chat', {}, JSON.stringify({
-      inviteCode,
+      inviteCode: normCode,
       sender: myHandle || 'you',
       text,
     }))
@@ -709,8 +711,9 @@ export default function MatchRoom() {
   // ── Send emote ────────────────────────────────────────────
   const sendEmote = (emote) => {
     if (!wsRef.current) return
+    const normCode = (inviteCode || '').trim().toUpperCase()
     wsRef.current.send('/app/match/emote', {}, JSON.stringify({
-      inviteCode,
+      inviteCode: normCode,
       sender: myHandle || 'you',
       emote,
     }))
@@ -719,9 +722,10 @@ export default function MatchRoom() {
   // ── Send skip vote ────────────────────────────────────────
   const sendSkipVote = () => {
     if (!wsRef.current || skipVoteMe) return
+    const normCode = (inviteCode || '').trim().toUpperCase()
     setSkipVoteMe(true)
     wsRef.current.send('/app/match/skip', {}, JSON.stringify({
-      inviteCode,
+      inviteCode: normCode,
       sender: myHandle || 'you',
     }))
     showToast('You voted to skip. Waiting for opponent…')
@@ -736,95 +740,125 @@ export default function MatchRoom() {
   }
 
   useEffect(() => {
-    const s1 = document.createElement('script')
-    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js'
-    s1.onload = () => {
-      const s2 = document.createElement('script')
-      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js'
-      s2.onload = () => {
-        try {
-          // WS_BASE is an https:// URL; SockJS accepts http/https and upgrades to wss automatically.
-          const sock   = new window.SockJS(`${WS_BASE}/ws`)
-          const client = window.Stomp.over(sock)
-          client.debug = null
-          client.connect({ Authorization: `Bearer ${localStorage.getItem('token') || ''}` }, () => {
-            // ── Existing: match score updates ──────────────
-            client.subscribe(`/topic/match/${inviteCode}`, msg => {
-              try {
-                const data = JSON.parse(msg.body)
-                if (isStaleUpdate(matchRef.current, data)) return
-                matchRef.current = data
-                const prev = prevStatusRef.current
-                if ((prev === 'WAITING' || prev === 'READY') && data.status === 'ONGOING') {
-                  setShowLoading(true)
-                  setTimeout(() => setShowLoading(false), data.problems?.length > 0 ? 800 : 2000)
-                }
-                prevStatusRef.current = data.status
-                detectChanges(data)
-                setMatch(data)
-                if (data?.status === 'FINISHED') navigate(`/results/${inviteCode}`)
-              } catch {}
-            })
+    const normCode = (inviteCode || '').trim().toUpperCase()
+    let client = null
+    let active = true
 
-            // ── NEW: real-time chat ────────────────────────
-            client.subscribe(`/topic/match/${inviteCode}/chat`, msg => {
-              try {
-                const data = JSON.parse(msg.body)
-                setChatMsgs(prev => [...prev, data])
-                setChatOpen(prev => {
-                  if (!prev) setUnreadCount(c => c + 1)
-                  return prev
-                })
-                // 🔔 Notify for opponent's chat messages
-                if (data.sender !== (myHandle || 'you')) {
-                  notify('💬 CF Arena', `${data.sender}: ${data.text}`)
-                }
-              } catch {}
-            })
+    const connectWs = () => {
+      if (!window.SockJS || !window.Stomp || !active) return
+      try {
+        const sock = new window.SockJS(`${WS_BASE}/ws`)
+        client = window.Stomp.over(sock)
+        client.debug = null
 
-            // ── NEW: emote reactions ───────────────────────
-            client.subscribe(`/topic/match/${inviteCode}/emotes`, msg => {
-              try {
-                const data = JSON.parse(msg.body)
-                triggerFloatEmote(data.emote)
-              } catch {}
-            })
+        const token = localStorage.getItem('token') || ''
+        const headers = token ? { Authorization: `Bearer ${token}`, authorization: `Bearer ${token}` } : {}
 
-            // ── NEW: skip vote notifications ───────────────
-            client.subscribe(`/topic/match/${inviteCode}/skip`, msg => {
-              try {
-                const data = JSON.parse(msg.body)
-                // Backend sends skipVoteUser1 + skipVoteUser2 booleans.
-                // Map them to "me" vs "opponent" using amIUser1Ref.
-                const iAmUser1 = amIUser1Ref.current
-                const myVoteFlag   = iAmUser1 ? data.skipVoteUser1 : data.skipVoteUser2
-                const oppVoteFlag  = iAmUser1 ? data.skipVoteUser2 : data.skipVoteUser1
-                if (myVoteFlag)  setSkipVoteMe(true)
-                if (oppVoteFlag) {
-                  setSkipVoteOpp(true)
-                  showToast('Opponent wants to skip!')
-                  notify('⊘ CF Arena', 'Opponent wants to skip the current problem')
-                }
-              } catch {}
-            })
+        client.connect(headers, () => {
+          if (!active) {
+            client.disconnect()
+            return
+          }
 
-            // ── NEW: match stopped notification ────────────
-            client.subscribe(`/topic/match/${inviteCode}/stopped`, () => {
-              try {
-                clearInterval(timerRef.current)
-                showToast('Match stopped by creator.')
-                navigate(`/results/${inviteCode}`)
-              } catch {}
-            })
+          // ── Match score & status updates ──────────────
+          client.subscribe(`/topic/match/${normCode}`, msg => {
+            try {
+              const data = JSON.parse(msg.body)
+              if (isStaleUpdate(matchRef.current, data)) return
+              matchRef.current = data
+              const prev = prevStatusRef.current
+              if ((prev === 'WAITING' || prev === 'READY') && data.status === 'ONGOING') {
+                setShowLoading(true)
+                setTimeout(() => setShowLoading(false), data.problems?.length > 0 ? 800 : 2000)
+              }
+              prevStatusRef.current = data.status
+              detectChanges(data)
+              setMatch(data)
+
+              // Sync skip votes from match state
+              const iAmUser1 = amIUser1Ref.current
+              if (data.skipVoteUser1 !== undefined && data.skipVoteUser2 !== undefined) {
+                setSkipVoteMe(iAmUser1 ? !!data.skipVoteUser1 : !!data.skipVoteUser2)
+                setSkipVoteOpp(iAmUser1 ? !!data.skipVoteUser2 : !!data.skipVoteUser1)
+              }
+
+              if (data?.status === 'FINISHED') navigate(`/results/${normCode}`)
+            } catch {}
           })
+
+          // ── Real-time chat ────────────────────────
+          client.subscribe(`/topic/match/${normCode}/chat`, msg => {
+            try {
+              const data = JSON.parse(msg.body)
+              setChatMsgs(prev => [...prev, data])
+              setChatOpen(prev => {
+                if (!prev) setUnreadCount(c => c + 1)
+                return prev
+              })
+              if (data.sender !== (myHandle || 'you')) {
+                notify('💬 CF Arena', `${data.sender}: ${data.text}`)
+              }
+            } catch {}
+          })
+
+          // ── Emote reactions ───────────────────────
+          client.subscribe(`/topic/match/${normCode}/emotes`, msg => {
+            try {
+              const data = JSON.parse(msg.body)
+              triggerFloatEmote(data.emote)
+            } catch {}
+          })
+
+          // ── Skip vote notifications ───────────────
+          client.subscribe(`/topic/match/${normCode}/skip`, msg => {
+            try {
+              const data = JSON.parse(msg.body)
+              const iAmUser1 = amIUser1Ref.current
+              const myVoteFlag   = iAmUser1 ? data.skipVoteUser1 : data.skipVoteUser2
+              const oppVoteFlag  = iAmUser1 ? data.skipVoteUser2 : data.skipVoteUser1
+              if (myVoteFlag)  setSkipVoteMe(true)
+              if (oppVoteFlag) {
+                setSkipVoteOpp(true)
+                showToast('Opponent wants to skip!')
+                notify('⊘ CF Arena', 'Opponent wants to skip the current problem')
+              }
+            } catch {}
+          })
+
+          // ── Match stopped notification ────────────
+          client.subscribe(`/topic/match/${normCode}/stopped`, () => {
+            try {
+              clearInterval(timerRef.current)
+              showToast('Match stopped by creator.')
+              navigate(`/results/${normCode}`)
+            } catch {}
+          })
+
           wsRef.current = client
-        } catch {}
-      }
-      document.head.appendChild(s2)
+        }, (err) => {
+          // Fallback or reconnect if needed
+        })
+      } catch (err) {}
     }
-    document.head.appendChild(s1)
-    return () => { try { wsRef.current?.disconnect?.() } catch {} }
-  }, [inviteCode, navigate, detectChanges])
+
+    if (window.SockJS && window.Stomp) {
+      connectWs()
+    } else {
+      const timer = setInterval(() => {
+        if (window.SockJS && window.Stomp) {
+          clearInterval(timer)
+          connectWs()
+        }
+      }, 200)
+      setTimeout(() => clearInterval(timer), 5000)
+    }
+
+    return () => {
+      active = false
+      try { client?.disconnect?.() } catch {}
+      try { wsRef.current?.disconnect?.() } catch {}
+    }
+  }, [inviteCode, myHandle, navigate, detectChanges, notify])
 
   useEffect(() => {
     if (!match?.endTime || match.status !== 'ONGOING') { clearInterval(timerRef.current); return }
@@ -842,18 +876,21 @@ export default function MatchRoom() {
     if ((match?.curIdx ?? 0) > 5) navigate(`/results/${inviteCode}`)
   }, [match, navigate, inviteCode])
 
-  const amIUser1 = myHandleReady
-    ? (myHandle ? match?.user1?.toLowerCase() === myHandle.toLowerCase() : navRole === 'host')
-    : navRole === 'host'
+  const isParticipant1 = myHandle && match?.user1 ? match.user1.toLowerCase() === myHandle.toLowerCase() : false
+  const isParticipant2 = myHandle && match?.user2 ? match.user2.toLowerCase() === myHandle.toLowerCase() : false
+  const isParticipant = isParticipant1 || isParticipant2
+
+  // If user is not participant 1 or 2, they are in spectator/referee monitor mode
+  const isSpectator = !isParticipant && (navRole === 'spectator' || !!match?.tournamentId || (!isParticipant1 && !isParticipant2 && myHandleReady && myHandle))
+
+  const amIUser1 = isSpectator ? true : (isParticipant1 || (navRole === 'host' && !isParticipant2))
   amIUser1Ref.current = amIUser1
 
-  const isHost  = amIUser1
-  const isGuest = myHandleReady && myHandle
-    ? match?.user2?.toLowerCase() === myHandle.toLowerCase()
-    : navRole === 'guest'
+  const isHost = isParticipant1 || (!isSpectator && navRole === 'host')
+  const isGuest = isParticipant2 || (!isSpectator && navRole === 'guest')
 
-  const meHandle  = amIUser1 ? match?.user1 : match?.user2
-  const oppHandle = amIUser1 ? match?.user2 : match?.user1
+  const meHandle  = isSpectator ? match?.user1 : (amIUser1 ? match?.user1 : match?.user2)
+  const oppHandle = isSpectator ? match?.user2 : (amIUser1 ? match?.user2 : match?.user1)
 
   // Fetch avatars whenever handles are confirmed
   useEffect(() => {
@@ -867,8 +904,9 @@ export default function MatchRoom() {
       fetchCFAvatar(oppHandle).then(url => { if(url) setOppAvatar(url) })
     }
   }, [oppHandle])
-  const meScore   = amIUser1 ? (match?.score1 ?? 0) : (match?.score2 ?? 0)
-  const oppScore  = amIUser1 ? (match?.score2 ?? 0) : (match?.score1 ?? 0)
+
+  const meScore   = isSpectator ? (match?.score1 ?? 0) : (amIUser1 ? (match?.score1 ?? 0) : (match?.score2 ?? 0))
+  const oppScore  = isSpectator ? (match?.score2 ?? 0) : (amIUser1 ? (match?.score2 ?? 0) : (match?.score1 ?? 0))
 
   const problems      = Array.isArray(match?.problems) ? match.problems : []
   const totalProblems = problems.length || 1
@@ -882,10 +920,11 @@ export default function MatchRoom() {
   const timerUrgent   = timeLeft !== null && timeLeft < 5 * 60 * 1000
   const guestJoined   = match?.user2 != null
   const guestReady    = guestJoined && matchStatus === 'READY'
-  const canClickReady = !isHost && !guestJoined && navRole === 'guest'
+  const canClickReady = !isHost && !guestJoined && navRole === 'guest' && !isSpectator
 
   const dotClass  = isOngoing ? 'live' : matchStatus === 'FINISHED' ? 'done' : 'waiting'
   const statusTxt = !match ? 'Loading…'
+    : isSpectator ? (isOngoing ? '👁 Monitoring match — live scores & progress' : '👁 Match finished')
     : isOngoing ? 'Live — match in progress'
     : matchStatus === 'FINISHED' ? 'Match finished'
     : matchStatus === 'READY' ? 'Both players ready — host can start'
@@ -894,7 +933,7 @@ export default function MatchRoom() {
   function myProblemState(i) {
     const results = toResultsArray(match?.player1Results)
     const oppResults = toResultsArray(match?.player2Results)
-    const myR  = amIUser1 ? results[i]    : oppResults[i]
+    const myR  = isSpectator ? results[i] : (amIUser1 ? results[i] : oppResults[i])
     if (myR === 'SOLVED') return 'solved'
     if (myR === 'SKIPPED') return 'skipped'
     if (i === curIdx) return 'current'
@@ -903,7 +942,7 @@ export default function MatchRoom() {
   function oppProblemState(i) {
     const results = toResultsArray(match?.player1Results)
     const oppResults = toResultsArray(match?.player2Results)
-    const oppR = amIUser1 ? oppResults[i] : results[i]
+    const oppR = isSpectator ? oppResults[i] : (amIUser1 ? oppResults[i] : results[i])
     if (oppR === 'SOLVED') return 'solved'
     if (oppR === 'SKIPPED') return 'skipped'
     if (i === curIdx) return 'working'
@@ -1086,11 +1125,13 @@ export default function MatchRoom() {
         <main className="mr-main">
           <div className="mr-topbar">
             <div>
-              <div className="mr-tag">CF Arena · Match Room</div>
+              <div className="mr-tag">
+                CF Arena · {isSpectator ? 'Referee & Spectator Monitor' : 'Match Room'}
+              </div>
               <div className="mr-title">code_<em>{inviteCode}</em></div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-              {isOngoing && isHost && (
+              {isOngoing && isHost && !isSpectator && (
                 <button
                   type="button"
                   className="mr-btn-stop"
@@ -1110,6 +1151,41 @@ export default function MatchRoom() {
               )}
             </div>
           </div>
+
+          {isSpectator && (
+            <div style={{
+              background: 'rgba(200,255,0,0.06)',
+              border: '1px solid rgba(200,255,0,0.2)',
+              borderRadius: 'var(--radius)',
+              padding: '10px 16px',
+              fontSize: '11px',
+              letterSpacing: '0.08em',
+              color: 'var(--accent)',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <span>⚖ REFEREE / SPECTATOR VIEW: Live match monitoring active.</span>
+              {match?.tournamentId && (
+                <button
+                  onClick={() => navigate(`/tournament/${match.tournamentId}`)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid var(--accent)',
+                    color: 'var(--accent)',
+                    borderRadius: '2px',
+                    padding: '4px 10px',
+                    fontFamily: 'var(--mono)',
+                    fontSize: '10px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Back to Bracket
+                </button>
+              )}
+            </div>
+          )}
 
           <div className={`mr-status ${isOngoing ? 'live' : ''}`}>
             <span className={`mr-dot ${dotClass}`} />
@@ -1161,11 +1237,13 @@ export default function MatchRoom() {
               </div>
               <div className="mr-lobby-foot">
                 <div className="mr-hint">
-                  {isHost
+                  {isSpectator
+                    ? 'Spectating lobby: waiting for players to ready up and host to start.'
+                    : isHost
                     ? guestReady ? <>Opponent is ready. <em>Start when you are.</em></> : 'Share the code. Start unlocks once opponent clicks Ready.'
                     : guestJoined ? "You're in. Waiting for host to start." : <>Click <em>Ready Up</em> to signal you're set.</>}
                 </div>
-                {isHost && (
+                {!isSpectator && isHost && (
                   <button className="mr-btn-primary" onClick={onStart} disabled={!guestReady || isStarting}>
                     {isStarting ? 'Starting…' : guestReady ? '⚔ Start Match' : 'Awaiting…'}
                   </button>
@@ -1175,7 +1253,7 @@ export default function MatchRoom() {
                     {isReadying ? 'Joining…' : '✓ Ready Up'}
                   </button>
                 )}
-                {!isHost && navRole !== 'host' && guestJoined && (
+                {!isSpectator && !isHost && navRole !== 'host' && guestJoined && (
                   <button className="mr-btn-primary" disabled>Waiting for host…</button>
                 )}
               </div>
@@ -1189,7 +1267,7 @@ export default function MatchRoom() {
                   <div className="mr-score-handle" style={{ display: 'flex', alignItems: 'center' }}>
                     {renderAvatar(meHandle, '24px')}
                     <span className="mr-score-handle-pip" />
-                    {meHandle || 'you'}&nbsp;·&nbsp;you
+                    {meHandle || (isSpectator ? 'Player 1' : 'you')}&nbsp;·&nbsp;{isSpectator ? 'Player 1' : 'you'}
                   </div>
                   <div className="mr-score-ring-wrap">
                     <ScoreRing score={meScore} total={totalProblems} isMe={true} />
@@ -1199,7 +1277,7 @@ export default function MatchRoom() {
                 <div className="mr-score-vs"><div className="mr-vs-inner">VS</div></div>
                 <div className={`mr-score-opp ${scorePopOpp ? 'score-pop' : ''}`}>
                   <div className="mr-score-handle" style={{ display: 'flex', alignItems: 'center' }}>
-                    {oppHandle || 'opponent'}
+                    {oppHandle || (isSpectator ? 'Player 2' : 'opponent')}
                     <span className="mr-score-handle-pip" style={{ background: '#ff6b6b', boxShadow: 'none' }} />
                     {renderAvatar(oppHandle, '24px')}
                   </div>
@@ -1213,14 +1291,14 @@ export default function MatchRoom() {
               <div className="mr-progress-section">
                 <div className="mr-prog-card">
                   <div className="mr-prog-head">
-                    <span className="mr-prog-label">Your progress</span>
+                    <span className="mr-prog-label">{isSpectator ? (meHandle || 'Player 1') : 'Your progress'}</span>
                     <span className="mr-prog-pct me">{mePct}%</span>
                   </div>
                   <div className="mr-prog-track"><div className="mr-prog-fill me" style={{ width: `${mePct}%` }} /></div>
                 </div>
                 <div className="mr-prog-card">
                   <div className="mr-prog-head">
-                    <span className="mr-prog-label">{oppHandle || 'Opponent'}</span>
+                    <span className="mr-prog-label">{oppHandle || (isSpectator ? 'Player 2' : 'Opponent')}</span>
                     <span className="mr-prog-pct opp">{oppPct}%</span>
                   </div>
                   <div className="mr-prog-track"><div className="mr-prog-fill opp" style={{ width: `${oppPct}%` }} /></div>
@@ -1231,8 +1309,8 @@ export default function MatchRoom() {
                 <div className="mr-prob-table-head">
                   <span className="mr-th">#</span>
                   <span className="mr-th">Problem</span>
-                  <span className="mr-th center">You</span>
-                  <span className="mr-th center">{oppHandle || 'Opponent'}</span>
+                  <span className="mr-th center">{isSpectator ? (meHandle || 'Player 1') : 'You'}</span>
+                  <span className="mr-th center">{oppHandle || (isSpectator ? 'Player 2' : 'Opponent')}</span>
                 </div>
                 {problems.map((raw, i) => {
                   const { fullLabel, url } = parseProblem(raw, i)
@@ -1290,19 +1368,29 @@ export default function MatchRoom() {
               {curIdx < problems.length && (
                 <div className="mr-skip-bar">
                   <div className="mr-skip-status">
-                    {skipVoteMe  && <span>You: <span className="check">✓ voted</span></span>}
-                    {skipVoteOpp && <span>Opponent: <span className="check">✓ voted</span></span>}
-                    {!skipVoteMe && !skipVoteOpp && <span>Both players must agree to skip</span>}
-                    {skipVoteMe && !skipVoteOpp && <span style={{color:'var(--muted)'}}>· waiting for opponent…</span>}
-                    {!skipVoteMe && skipVoteOpp && <span style={{color:'var(--warn)'}}>· opponent wants to skip!</span>}
+                    {isSpectator ? (
+                      <span>
+                        Skip votes: {skipVoteMe ? 'Player 1 voted' : 'Player 1 not voted'} · {skipVoteOpp ? 'Player 2 voted' : 'Player 2 not voted'}
+                      </span>
+                    ) : (
+                      <>
+                        {skipVoteMe  && <span>You: <span className="check">✓ voted</span></span>}
+                        {skipVoteOpp && <span>Opponent: <span className="check">✓ voted</span></span>}
+                        {!skipVoteMe && !skipVoteOpp && <span>Both players must agree to skip</span>}
+                        {skipVoteMe && !skipVoteOpp && <span style={{color:'var(--muted)'}}>· waiting for opponent…</span>}
+                        {!skipVoteMe && skipVoteOpp && <span style={{color:'var(--warn)'}}>· opponent wants to skip!</span>}
+                      </>
+                    )}
                   </div>
-                  <button
-                    className={`mr-btn-skip ${skipVoteMe ? 'voted' : ''}`}
-                    onClick={sendSkipVote}
-                    disabled={skipVoteMe}
-                  >
-                    {skipVoteMe ? '⊘ Vote Sent' : '⊘ Vote to Skip'}
-                  </button>
+                  {!isSpectator && (
+                    <button
+                      className={`mr-btn-skip ${skipVoteMe ? 'voted' : ''}`}
+                      onClick={sendSkipVote}
+                      disabled={skipVoteMe}
+                    >
+                      {skipVoteMe ? '⊘ Vote Sent' : '⊘ Vote to Skip'}
+                    </button>
+                  )}
                 </div>
               )}
             </>

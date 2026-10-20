@@ -184,21 +184,48 @@ export default function Navbar({ onCfSaved }) {
     }
   }
 
+  const copyToClipboard = (text, successMsg) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text)
+        .then(() => {
+          setCopied(true)
+          showToast(successMsg)
+          setTimeout(() => setCopied(false), 2500)
+        })
+        .catch(() => fallbackCopy(text, successMsg))
+    } else {
+      fallbackCopy(text, successMsg)
+    }
+  }
+
+  const fallbackCopy = (text, successMsg) => {
+    try {
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.opacity = '0'
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+      setCopied(true)
+      showToast(successMsg)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      showToast('Failed to copy. Please select and copy manually.')
+    }
+  }
+
   const handleCopyCode = () => {
     if (challenge?.verificationCode) {
-      navigator.clipboard.writeText(challenge.verificationCode)
-      setCopied(true)
-      showToast('Verification code copied to clipboard!')
-      setTimeout(() => setCopied(false), 2500)
+      copyToClipboard(challenge.verificationCode, 'Verification code copied to clipboard!')
     }
   }
 
   const handleCopySnippet = () => {
     const snippet = challenge?.codeSnippet || `// ${challenge?.verificationCode}\n#include <iostream>\nint main() {\n    cf_arena_verification_error;\n    return 0;\n}`
-    navigator.clipboard.writeText(snippet)
-    setCopied(true)
-    showToast('Code snippet copied to clipboard!')
-    setTimeout(() => setCopied(false), 2500)
+    copyToClipboard(snippet, 'Code snippet copied to clipboard!')
   }
 
   const handleCheckVerification = async () => {

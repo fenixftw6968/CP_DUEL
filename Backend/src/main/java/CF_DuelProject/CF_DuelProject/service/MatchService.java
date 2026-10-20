@@ -585,6 +585,10 @@ public class MatchService {
             payload.put("endTime", m.getEndTime());
             payload.put("player1Results", m.getPlayer1Results());
             payload.put("player2Results", m.getPlayer2Results());
+            payload.put("skipVoteUser1", m.isSkipVoteUser1());
+            payload.put("skipVoteUser2", m.isSkipVoteUser2());
+            payload.put("tournamentId", m.getTournamentId());
+            payload.put("bracketRound", m.getBracketRound());
             // authoritative server clock so clients can correct their local clock skew for the countdown
             payload.put("serverTime", new Date());
             return payload;
@@ -612,6 +616,8 @@ public class MatchService {
             payload.put("endTime", m.getEndTime());
             payload.put("player1Results", m.getPlayer1Results());
             payload.put("player2Results", m.getPlayer2Results());
+            payload.put("tournamentId", m.getTournamentId());
+            payload.put("bracketRound", m.getBracketRound());
             // authoritative server clock so clients can correct their local clock skew for the countdown
             payload.put("serverTime", new Date());
        
@@ -736,8 +742,9 @@ public class MatchService {
 
         String handle = user.getCfHandle();
         if (handle != null && !handle.isBlank() && isPlayer(handle, p1, p2)) return true;
-        if (tournamentId != null && handle != null) {
-            return isTournamentOrganizer(tournamentId, java.util.Set.of(handle.trim().toLowerCase()));
+        if (tournamentId != null) {
+            // Tournament matches can be monitored by host referee and viewed by spectators
+            return true;
         }
         return false;
     }

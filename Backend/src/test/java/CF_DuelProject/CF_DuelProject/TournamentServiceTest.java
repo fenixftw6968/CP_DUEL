@@ -155,4 +155,47 @@ class TournamentServiceTest {
         assertEquals(HttpStatus.CONFLICT,
                 assertThrows(ResponseStatusException.class, () -> service.advanceRoundManual("t1", "alice")).getStatusCode());
     }
+
+    @Test
+    void refereeCannotRegisterAsPlayer() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("REGISTRATION");
+        t.setRegisteredPlayers(new ArrayList<>());
+        t.setMaxPlayers(8);
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service.registerForTournament("t1", "alice"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("referee"));
+    }
+
+    @Test
+    void requestToJoinAndAcceptDeclineFlow() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("REGISTRATION");
+        t.setRegisteredPlayers(new ArrayList<>());
+        t.setJoinRequests(new ArrayList<>());
+        t.setMaxPlayers(8);
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+
+        // Creator cannot request to join
+        assertThrows(ResponseStatusException.class, () -> service.requestToJoin("t1", "alice"));
+
+        // Bob requests to join
+        service.requestToJoin("t1", "bob");
+        assertTrue(t.getJoinRequests().contains("bob"));
+
+        // Non-organizer cannot accept
+        assertThrows(ResponseStatusException.class, () -> service.acceptJoinRequest("t1", "bob", "charlie"));
+
+        // Alice (organizer/referee) accepts Bob
+        service.acceptJoinRequest("t1", "bob", "alice");
+        assertTrue(t.getRegisteredPlayers().contains("bob"));
+        assertTrue(!t.getJoinRequests().contains("bob"));
+    }
 }

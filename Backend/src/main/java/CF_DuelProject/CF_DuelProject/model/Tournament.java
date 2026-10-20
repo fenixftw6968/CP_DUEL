@@ -30,6 +30,7 @@ public class Tournament {
     private int matchDurationMinutes;            // per match
 
     private List<String> registeredPlayers = new ArrayList<>();
+    private List<String> joinRequests = new ArrayList<>();
 
     private String status;                       // REGISTRATION, ONGOING, FINISHED, CANCELLED
 

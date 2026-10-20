@@ -76,7 +76,53 @@ public class TournamentController {
         return false;
     }
 
-    // ✅ Register for Tournament
+    // ✅ Request to Join Tournament (Player sends request)
+    @PostMapping("/{id}/join-request")
+    public Tournament requestToJoin(Authentication authentication,
+            @PathVariable String id) {
+
+        String email = (String) authentication.getPrincipal();
+        String cfHandle = userService.getVerifiedCfHandleByEmail(email);
+
+        return tournamentService.requestToJoin(id, cfHandle);
+    }
+
+    // ✅ Cancel Join Request (Player cancels their request)
+    @PostMapping("/{id}/join-request/cancel")
+    public Tournament cancelJoinRequest(Authentication authentication,
+            @PathVariable String id) {
+
+        String email = (String) authentication.getPrincipal();
+        String cfHandle = userService.getVerifiedCfHandleByEmail(email);
+
+        return tournamentService.cancelJoinRequest(id, cfHandle);
+    }
+
+    // ✅ Accept Player Join Request (Host only)
+    @PostMapping("/{id}/accept-request")
+    public Tournament acceptRequest(Authentication authentication,
+            @PathVariable String id,
+            @RequestParam String playerHandle) {
+
+        String email = (String) authentication.getPrincipal();
+        String cfHandle = userService.getVerifiedCfHandleByEmail(email);
+
+        return tournamentService.acceptJoinRequest(id, cfHandle, playerHandle);
+    }
+
+    // ✅ Decline Player Join Request (Host only)
+    @PostMapping("/{id}/decline-request")
+    public Tournament declineRequest(Authentication authentication,
+            @PathVariable String id,
+            @RequestParam String playerHandle) {
+
+        String email = (String) authentication.getPrincipal();
+        String cfHandle = userService.getVerifiedCfHandleByEmail(email);
+
+        return tournamentService.declineJoinRequest(id, cfHandle, playerHandle);
+    }
+
+    // ✅ Register for Tournament (backward compatibility)
     @PostMapping("/{id}/register")
     public Tournament register(Authentication authentication,
             @PathVariable String id) {
