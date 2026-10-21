@@ -6,7 +6,9 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import CF_DuelProject.CF_DuelProject.dto.ChatMessage;
 import CF_DuelProject.CF_DuelProject.dto.CreateMatchRequest;
+import CF_DuelProject.CF_DuelProject.dto.EmoteMessage;
 import CF_DuelProject.CF_DuelProject.model.MatchPrimary;
 import CF_DuelProject.CF_DuelProject.model.MatchSecondary;
 import CF_DuelProject.CF_DuelProject.service.MatchService;
@@ -130,6 +132,51 @@ public class MatchController {
         String requester = authentication.getName();
         MatchSecondary stopped = matchService.stopMatchByCreator(identifier, requester);
         return ResponseEntity.ok(stopped);
+    }
+
+    @PostMapping("/skip")
+    public ResponseEntity<?> skip(Authentication authentication, @RequestParam String inviteCode) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        String handle = matchService.resolveParticipantHandle(authentication.getName(), inviteCode);
+        if (handle == null) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "You are not a participant of this match");
+        }
+        matchService.handleSkipVote(inviteCode, handle);
+        return ResponseEntity.ok(Map.of("success", true, "voter", handle));
+    }
+
+    @PostMapping("/chat")
+    public ResponseEntity<?> chat(Authentication authentication, @RequestBody ChatMessage req) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        if (req == null || req.getInviteCode() == null || req.getText() == null) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "inviteCode and text are required");
+        }
+        String handle = matchService.resolveParticipantHandle(authentication.getName(), req.getInviteCode());
+        if (handle == null) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "You are not a participant of this match");
+        }
+        matchService.sendChatMessage(req.getInviteCode(), authentication.getName(), req.getText());
+        return ResponseEntity.ok(Map.of("success", true, "sender", handle, "text", req.getText()));
+    }
+
+    @PostMapping("/emote")
+    public ResponseEntity<?> emote(Authentication authentication, @RequestBody EmoteMessage req) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        if (req == null || req.getInviteCode() == null || req.getEmote() == null) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "inviteCode and emote are required");
+        }
+        String handle = matchService.resolveParticipantHandle(authentication.getName(), req.getInviteCode());
+        if (handle == null) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "You are not a participant of this match");
+        }
+        matchService.sendEmoteMessage(req.getInviteCode(), authentication.getName(), req.getEmote());
+        return ResponseEntity.ok(Map.of("success", true, "sender", handle, "emote", req.getEmote()));
     }
 
 }

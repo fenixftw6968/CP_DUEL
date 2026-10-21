@@ -23,6 +23,9 @@ export const API_PATHS = {
     STOP: (code) => `/api/match/${code}/stop`,
     STATUS: '/api/match/status',
     HISTORY: '/api/match/history',  // ✅ No userId param — returns own history
+    SKIP: '/api/match/skip',
+    CHAT: '/api/match/chat',
+    EMOTE: '/api/match/emote',
   },
   TOURNAMENT: {
     CREATE: '/api/tournament/create',

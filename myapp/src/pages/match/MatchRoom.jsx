@@ -666,6 +666,14 @@ export default function MatchRoom() {
         prevStatusRef.current = data.status
         detectChanges(data)
         setMatch(data)
+
+        // Sync skip votes from match state so refresh or missed WS messages preserve skip state
+        const iAmUser1 = amIUser1Ref.current
+        if (data.skipVoteUser1 !== undefined && data.skipVoteUser2 !== undefined) {
+          setSkipVoteMe(iAmUser1 ? !!data.skipVoteUser1 : !!data.skipVoteUser2)
+          setSkipVoteOpp(iAmUser1 ? !!data.skipVoteUser2 : !!data.skipVoteUser1)
+        }
+
         // ✅ Use functional updater so this doesn't need showLoading in the dep array
         setShowLoading(prev => {
           if (prev && data.problems?.length > 0) setTimeout(() => setShowLoading(false), 600)
@@ -695,40 +703,104 @@ export default function MatchRoom() {
   useEffect(() => { if (chatOpen) setUnreadCount(0) }, [chatOpen])
 
   // ── Send chat message ─────────────────────────────────────
-  // ── Send chat message ─────────────────────────────────────
-  const sendChat = () => {
+  const sendChat = async () => {
     const text = chatInput.trim()
-    if (!text || !wsRef.current) return
+    if (!text) return
     const normCode = (inviteCode || '').trim().toUpperCase()
-    wsRef.current.send('/app/match/chat', {}, JSON.stringify({
-      inviteCode: normCode,
-      sender: myHandle || 'you',
-      text,
-    }))
+    const token = localStorage.getItem('token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}`, authorization: `Bearer ${token}` } : {}
+
     setChatInput('')
+
+    let sentViaWs = false
+    if (wsRef.current && wsRef.current.connected) {
+      try {
+        wsRef.current.send('/app/match/chat', headers, JSON.stringify({
+          inviteCode: normCode,
+          sender: myHandle || 'you',
+          text,
+        }))
+        sentViaWs = true
+      } catch (err) {
+        console.warn('WS sendChat failed, falling back to REST:', err)
+      }
+    }
+
+    if (!sentViaWs) {
+      try {
+        await axiosInstance.post(API_PATHS.MATCH.CHAT, {
+          inviteCode: normCode,
+          sender: myHandle || 'you',
+          text,
+        })
+      } catch (err) {
+        console.error('Failed to send chat message:', err)
+        showToast('Failed to send chat message', 'error')
+      }
+    }
   }
 
   // ── Send emote ────────────────────────────────────────────
-  const sendEmote = (emote) => {
-    if (!wsRef.current) return
+  const sendEmote = async (emote) => {
+    if (!emote) return
     const normCode = (inviteCode || '').trim().toUpperCase()
-    wsRef.current.send('/app/match/emote', {}, JSON.stringify({
-      inviteCode: normCode,
-      sender: myHandle || 'you',
-      emote,
-    }))
+    const token = localStorage.getItem('token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}`, authorization: `Bearer ${token}` } : {}
+
+    let sentViaWs = false
+    if (wsRef.current && wsRef.current.connected) {
+      try {
+        wsRef.current.send('/app/match/emote', headers, JSON.stringify({
+          inviteCode: normCode,
+          sender: myHandle || 'you',
+          emote,
+        }))
+        sentViaWs = true
+      } catch (err) {
+        console.warn('WS sendEmote failed, falling back to REST:', err)
+      }
+    }
+
+    if (!sentViaWs) {
+      try {
+        await axiosInstance.post(API_PATHS.MATCH.EMOTE, {
+          inviteCode: normCode,
+          sender: myHandle || 'you',
+          emote,
+        })
+      } catch (err) {
+        console.warn('REST sendEmote failed:', err)
+      }
+    }
   }
 
   // ── Send skip vote ────────────────────────────────────────
-  const sendSkipVote = () => {
-    if (!wsRef.current || skipVoteMe) return
+  const sendSkipVote = async () => {
+    if (skipVoteMe) return
     const normCode = (inviteCode || '').trim().toUpperCase()
     setSkipVoteMe(true)
-    wsRef.current.send('/app/match/skip', {}, JSON.stringify({
-      inviteCode: normCode,
-      sender: myHandle || 'you',
-    }))
     showToast('You voted to skip. Waiting for opponent…')
+
+    const token = localStorage.getItem('token') || ''
+    const headers = token ? { Authorization: `Bearer ${token}`, authorization: `Bearer ${token}` } : {}
+
+    if (wsRef.current && wsRef.current.connected) {
+      try {
+        wsRef.current.send('/app/match/skip', headers, JSON.stringify({
+          inviteCode: normCode,
+          sender: myHandle || 'you',
+        }))
+      } catch (err) {
+        console.warn('WS skip vote error:', err)
+      }
+    }
+
+    // Always invoke REST fallback as well so skip vote is guaranteed to be persisted and counted
+    try {
+      await axiosInstance.post(`${API_PATHS.MATCH.SKIP}?inviteCode=${encodeURIComponent(normCode)}`)
+    } catch (err) {
+      console.warn('REST skip vote failed:', err)
+    }
   }
 
   // ── Trigger floating emote animation ─────────────────────
@@ -836,9 +908,12 @@ export default function MatchRoom() {
 
           wsRef.current = client
         }, (err) => {
-          // Fallback or reconnect if needed
+          console.warn('WS error/disconnected:', err)
+          if (active) setTimeout(connectWs, 3000)
         })
-      } catch (err) {}
+      } catch (err) {
+        if (active) setTimeout(connectWs, 3000)
+      }
     }
 
     if (window.SockJS && window.Stomp) {
@@ -876,9 +951,15 @@ export default function MatchRoom() {
     if ((match?.curIdx ?? 0) > 5) navigate(`/results/${inviteCode}`)
   }, [match, navigate, inviteCode])
 
-  const isParticipant1 = myHandle && match?.user1 ? match.user1.toLowerCase() === myHandle.toLowerCase() : false
-  const isParticipant2 = myHandle && match?.user2 ? match.user2.toLowerCase() === myHandle.toLowerCase() : false
-  const isParticipant = isParticipant1 || isParticipant2
+  const isParticipant1 = myHandle && (
+    (match?.user1 && match.user1.toLowerCase() === myHandle.toLowerCase()) ||
+    (match?.player1CFHandle && match.player1CFHandle.toLowerCase() === myHandle.toLowerCase())
+  )
+  const isParticipant2 = myHandle && (
+    (match?.user2 && match.user2.toLowerCase() === myHandle.toLowerCase()) ||
+    (match?.player2CFHandle && match.player2CFHandle.toLowerCase() === myHandle.toLowerCase())
+  )
+  const isParticipant = !!isParticipant1 || !!isParticipant2
 
   // If user is not participant 1 or 2, they are in spectator/referee monitor mode
   const isSpectator = !isParticipant && (navRole === 'spectator' || !!match?.tournamentId || (!isParticipant1 && !isParticipant2 && myHandleReady && myHandle))
@@ -1072,7 +1153,7 @@ export default function MatchRoom() {
       </div>
 
       {/* ── Chat Box (fixed bottom-right) ── */}
-      {isOngoing && (
+      {(isOngoing || matchStatus === 'WAITING' || matchStatus === 'READY') && (
         <div className="mr-chat">
           {chatOpen && (
             <div className="mr-chat-panel">

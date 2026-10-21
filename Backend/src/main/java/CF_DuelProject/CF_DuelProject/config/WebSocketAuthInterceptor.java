@@ -1,5 +1,6 @@
 package CF_DuelProject.CF_DuelProject.config;
 
+import java.security.Principal;
 import java.util.Collections;
 import java.util.List;
 
@@ -33,6 +34,8 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private static final String MATCH_TOPIC_PREFIX = "/topic/match/";
 
+    private static final String USER_PRINCIPAL_KEY = "USER_PRINCIPAL";
+
     private final JwtService jwtService;
     private final MatchService matchService;
 
@@ -49,29 +52,16 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
             return message;
         }
 
-        if (StompCommand.CONNECT.equals(accessor.getCommand())) {
-            List<String> headers = accessor.getNativeHeader("Authorization");
-            if (headers == null || headers.isEmpty()) {
-                headers = accessor.getNativeHeader("authorization");
-            }
-            if (headers != null && !headers.isEmpty()) {
-                String header = headers.get(0);
-                if (header != null && header.startsWith("Bearer ")) {
-                    String token = header.substring(7);
-                    try {
-                        if (jwtService.isTokenValid(token)) {
-                            String email = jwtService.extractEmail(token);
-                            if (email != null) {
-                                accessor.setUser(new UsernamePasswordAuthenticationToken(
-                                        email, null, Collections.emptyList()));
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.warn("WebSocket CONNECT with invalid token: {}", e.getMessage());
-                    }
+        if (StompCommand.CONNECT.equals(accessor.getCommand()) || StompCommand.STOMP.equals(accessor.getCommand())) {
+            Principal auth = extractPrincipalFromHeaders(accessor);
+            if (auth != null) {
+                accessor.setUser(auth);
+                if (accessor.getSessionAttributes() != null) {
+                    accessor.getSessionAttributes().put(USER_PRINCIPAL_KEY, auth);
                 }
             }
         } else if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            ensureUserPopulated(accessor);
             String destination = accessor.getDestination();
             // Match topics carry players' private state (problems, scores, chat): participants only.
             if (destination != null && destination.startsWith(MATCH_TOPIC_PREFIX)) {
@@ -83,11 +73,55 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 }
             }
         } else if (StompCommand.SEND.equals(accessor.getCommand())) {
+            ensureUserPopulated(accessor);
             String destination = accessor.getDestination();
             if (destination != null && destination.startsWith("/app/") && accessor.getUser() == null) {
                 throw new MessagingException("Authentication required to send messages");
             }
         }
         return message;
+    }
+
+    private void ensureUserPopulated(StompHeaderAccessor accessor) {
+        if (accessor.getUser() == null) {
+            if (accessor.getSessionAttributes() != null) {
+                Object cached = accessor.getSessionAttributes().get(USER_PRINCIPAL_KEY);
+                if (cached instanceof Principal p) {
+                    accessor.setUser(p);
+                    return;
+                }
+            }
+            Principal auth = extractPrincipalFromHeaders(accessor);
+            if (auth != null) {
+                accessor.setUser(auth);
+                if (accessor.getSessionAttributes() != null) {
+                    accessor.getSessionAttributes().put(USER_PRINCIPAL_KEY, auth);
+                }
+            }
+        }
+    }
+
+    private Principal extractPrincipalFromHeaders(StompHeaderAccessor accessor) {
+        List<String> headers = accessor.getNativeHeader("Authorization");
+        if (headers == null || headers.isEmpty()) {
+            headers = accessor.getNativeHeader("authorization");
+        }
+        if (headers != null && !headers.isEmpty()) {
+            String header = headers.get(0);
+            if (header != null && header.startsWith("Bearer ")) {
+                String token = header.substring(7);
+                try {
+                    if (jwtService.isTokenValid(token)) {
+                        String email = jwtService.extractEmail(token);
+                        if (email != null) {
+                            return new UsernamePasswordAuthenticationToken(email, null, Collections.emptyList());
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("WebSocket invalid token: {}", e.getMessage());
+                }
+            }
+        }
+        return null;
     }
 }

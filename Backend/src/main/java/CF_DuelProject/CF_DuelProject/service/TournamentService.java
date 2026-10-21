@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
 
+import java.security.SecureRandom;
+
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
@@ -19,11 +22,9 @@ import CF_DuelProject.CF_DuelProject.model.User;
 import CF_DuelProject.CF_DuelProject.model.Tournament;
 import CF_DuelProject.CF_DuelProject.repository.SecondaryMatchRepository;
 import CF_DuelProject.CF_DuelProject.repository.TournamentRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class TournamentService {
 
@@ -32,6 +33,31 @@ public class TournamentService {
     private final SecondaryMatchRepository matchRepository2;
     private final CF_DuelProject.CF_DuelProject.repository.UserRepository userRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final CodeforcesService codeforcesService;
+    private final SecureRandom random = new SecureRandom();
+
+    @Autowired
+    public TournamentService(TournamentRepository tournamentRepository,
+                             CF_DuelProject.CF_DuelProject.repository.PrimaryMatchRepository matchRepository,
+                             SecondaryMatchRepository matchRepository2,
+                             CF_DuelProject.CF_DuelProject.repository.UserRepository userRepository,
+                             SimpMessagingTemplate messagingTemplate,
+                             @Autowired(required = false) CodeforcesService codeforcesService) {
+        this.tournamentRepository = tournamentRepository;
+        this.matchRepository = matchRepository;
+        this.matchRepository2 = matchRepository2;
+        this.userRepository = userRepository;
+        this.messagingTemplate = messagingTemplate;
+        this.codeforcesService = codeforcesService;
+    }
+
+    public TournamentService(TournamentRepository tournamentRepository,
+                             CF_DuelProject.CF_DuelProject.repository.PrimaryMatchRepository matchRepository,
+                             SecondaryMatchRepository matchRepository2,
+                             CF_DuelProject.CF_DuelProject.repository.UserRepository userRepository,
+                             SimpMessagingTemplate messagingTemplate) {
+        this(tournamentRepository, matchRepository, matchRepository2, userRepository, messagingTemplate, null);
+    }
 
     // ─── Code Generator (reuses same pattern as MatchService) ───
     private String generateCode() {
@@ -605,11 +631,15 @@ public class TournamentService {
                 }
                 winner = match.getWinnerId();
                 if ("DRAW".equals(winner)) {
-                    // NOTE: no tie-break rule has been specified by the organizers; this coin flip is the
-                    // pre-existing behaviour and is logged so it can be audited. Replace once a rule is decided.
-                    java.security.SecureRandom random = new java.security.SecureRandom();
-                    winner = random.nextBoolean() ? player1 : player2;
-                    log.warn("Match {} ended in DRAW, randomly advancing {}", code, winner);
+                    winner = resolveTieBreakWinner(player1, player2);
+                    match.setWinnerId(winner);
+                    match.setEndedReason("DRAW_TIE_BREAK");
+                    try {
+                        matchRepository2.save(match);
+                    } catch (Exception e) {
+                        log.warn("Failed to persist tie-break winner to match {}: {}", code, e.getMessage());
+                    }
+                    log.info("Match {} ended in DRAW: tie-break advancing {}", code, winner);
                 } else if (winner.equalsIgnoreCase(player1)) {
                     winner = player1;
                 } else if (winner.equalsIgnoreCase(player2)) {
@@ -665,6 +695,61 @@ public class TournamentService {
         }
 
         tournamentRepository.save(t);
+    }
+
+    /**
+     * Resolves a tie-breaker when a tournament match ends in a DRAW.
+     * Rule:
+     * - The player with the higher Codeforces rating advances to the next round.
+     * - If both players have the exact same rating (or both are unrated/unavailable),
+     *   a random coin flip decides which player advances.
+     */
+    public String resolveTieBreakWinner(String player1, String player2) {
+        int r1 = getPlayerRating(player1);
+        int r2 = getPlayerRating(player2);
+
+        log.info("⚔️ Tournament DRAW tie-breaker: {} (rating: {}) vs {} (rating: {})", player1, r1, player2, r2);
+
+        if (r1 > r2) {
+            log.info("🏆 {} advances with higher rating ({} > {})", player1, r1, r2);
+            return player1;
+        } else if (r2 > r1) {
+            log.info("🏆 {} advances with higher rating ({} > {})", player2, r2, r1);
+            return player2;
+        } else {
+            boolean coinFlip = random.nextBoolean();
+            String chosen = coinFlip ? player1 : player2;
+            log.info("🪙 Equal rating ({} == {}): coin flip randomly selected {} to advance", r1, r2, chosen);
+            return chosen;
+        }
+    }
+
+    public int getPlayerRating(String player) {
+        if (player == null || player.isBlank()) return 0;
+        String trimmed = player.trim();
+
+        // 1. Try CodeforcesService
+        try {
+            if (codeforcesService != null) {
+                Integer rating = codeforcesService.getUserRating(trimmed);
+                if (rating != null) return rating;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to fetch rating from CodeforcesService for {}: {}", trimmed, e.getMessage());
+        }
+
+        // 2. Fallback: check User entity in DB if present
+        try {
+            User user = userRepository.findByCfHandleIgnoreCase(trimmed)
+                    .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(trimmed).orElse(null));
+            if (user != null && user.getRating() != null) {
+                return user.getRating();
+            }
+        } catch (Exception e) {
+            log.debug("User lookup failed for rating of {}: {}", trimmed, e.getMessage());
+        }
+
+        return 0; // Default if unrated or unknown
     }
 
     // ═══════════════════════════════════════════════════════════

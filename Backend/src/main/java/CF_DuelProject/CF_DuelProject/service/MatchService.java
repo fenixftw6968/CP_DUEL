@@ -16,6 +16,8 @@ import com.mongodb.client.result.UpdateResult;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 
+import CF_DuelProject.CF_DuelProject.dto.ChatMessage;
+import CF_DuelProject.CF_DuelProject.dto.EmoteMessage;
 import CF_DuelProject.CF_DuelProject.dto.SolveResult;
 import CF_DuelProject.CF_DuelProject.model.MatchPrimary;
 import CF_DuelProject.CF_DuelProject.model.MatchSecondary;
@@ -689,25 +691,67 @@ public class MatchService {
 
     /**
      * Returns the caller's Codeforces handle if (and only if) they are one of the two players of the match
-     * with this invite code; null otherwise. Used to authorize and attribute WebSocket messages server-side.
+     * with this invite code; null otherwise. Used to authorize and attribute WebSocket and REST messages server-side.
      */
     public String resolveParticipantHandle(String email, String inviteCode) {
         if (email == null || inviteCode == null || inviteCode.isBlank()) return null;
-        User user = userRepository.findByEmail(email).orElse(null);
-        if (user == null) return null;
-        String handle = user.getCfHandle();
-        if (handle == null || handle.isBlank()) return null;
-
         String code = normalizeCode(inviteCode);
         MatchPrimary primary = matchRepository.findByInviteCode(code).orElse(null);
-        if (primary != null) {
-            return isPlayer(handle, primary.getPlayer1CFHandle(), primary.getPlayer2CFHandle()) ? handle : null;
-        }
-        MatchSecondary secondary = matchRepository2.findByInviteCode(code).orElse(null);
-        if (secondary != null) {
-            return isPlayer(handle, secondary.getPlayer1CFHandle(), secondary.getPlayer2CFHandle()) ? handle : null;
+        MatchSecondary secondary = primary == null ? matchRepository2.findByInviteCode(code).orElse(null) : null;
+        if (primary == null && secondary == null) return null;
+
+        String p1 = primary != null ? primary.getPlayer1CFHandle() : secondary.getPlayer1CFHandle();
+        String p2 = primary != null ? primary.getPlayer2CFHandle() : secondary.getPlayer2CFHandle();
+        String u1 = primary != null ? primary.getUser1() : secondary.getUser1();
+        String u2 = primary != null ? primary.getUser2() : secondary.getUser2();
+        String id1 = primary != null ? primary.getPlayer1Id() : secondary.getPlayer1Id();
+        String id2 = primary != null ? primary.getPlayer2Id() : secondary.getPlayer2Id();
+
+        String trimmed = email.trim();
+        User user = userRepository.findByEmail(trimmed)
+                .orElseGet(() -> userRepository.findByEmail(trimmed.toLowerCase())
+                .orElseGet(() -> userRepository.findById(trimmed)
+                .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(trimmed)
+                .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(trimmed)
+                .orElse(null)))));
+
+        if (user != null) {
+            String cf = user.getCfHandle();
+            String uid = user.getId();
+            String uEmail = user.getEmail();
+            if (matchesPlayer(p1, u1, id1, cf, uid, uEmail, trimmed)) {
+                return (cf != null && !cf.isBlank()) ? cf : (p1 != null ? p1 : (u1 != null ? u1 : trimmed));
+            }
+            if (matchesPlayer(p2, u2, id2, cf, uid, uEmail, trimmed)) {
+                return (cf != null && !cf.isBlank()) ? cf : (p2 != null ? p2 : (u2 != null ? u2 : trimmed));
+            }
+        } else {
+            if (matchesDirect(p1, u1, id1, trimmed)) {
+                return p1 != null ? p1 : (u1 != null ? u1 : trimmed);
+            }
+            if (matchesDirect(p2, u2, id2, trimmed)) {
+                return p2 != null ? p2 : (u2 != null ? u2 : trimmed);
+            }
         }
         return null;
+    }
+
+    private boolean matchesPlayer(String pHandle, String uHandle, String pId, String userCf, String userId, String userEmail, String rawCaller) {
+        if (userCf != null && !userCf.isBlank()) {
+            if (userCf.equalsIgnoreCase(pHandle) || userCf.equalsIgnoreCase(uHandle)) return true;
+        }
+        if (userId != null && !userId.isBlank()) {
+            if (userId.equalsIgnoreCase(pId) || userId.equalsIgnoreCase(uHandle)) return true;
+        }
+        if (userEmail != null && !userEmail.isBlank()) {
+            if (userEmail.equalsIgnoreCase(uHandle) || userEmail.equalsIgnoreCase(pHandle)) return true;
+        }
+        return matchesDirect(pHandle, uHandle, pId, rawCaller);
+    }
+
+    private boolean matchesDirect(String pHandle, String uHandle, String pId, String rawCaller) {
+        if (rawCaller == null || rawCaller.isBlank()) return false;
+        return rawCaller.equalsIgnoreCase(pHandle) || rawCaller.equalsIgnoreCase(uHandle) || rawCaller.equalsIgnoreCase(pId);
     }
 
     private boolean isTournamentOrganizer(String tournamentId, java.util.Set<String> aliases) {
@@ -722,31 +766,54 @@ public class MatchService {
      */
     public boolean canViewMatch(String email, String identifier) {
         if (email == null || identifier == null || identifier.isBlank()) return false;
-        User user = userRepository.findByEmail(email).orElse(null);
-        if (user == null) return false;
-        if (user.isAdmin()) return true;
+        String trimmed = email.trim();
+        User user = userRepository.findByEmail(trimmed)
+                .orElseGet(() -> userRepository.findByEmail(trimmed.toLowerCase())
+                .orElseGet(() -> userRepository.findById(trimmed)
+                .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(trimmed)
+                .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(trimmed)
+                .orElse(null)))));
+        if (user != null && user.isAdmin()) return true;
 
         String ident = identifier.trim();
         String code = normalizeCode(ident);
-        String p1; String p2; String tournamentId;
+        String p1; String p2; String u1; String u2; String id1; String id2; String tournamentId;
         MatchPrimary primary = matchRepository.findByInviteCode(code)
                 .orElseGet(() -> matchRepository.findById(ident).orElse(null));
         if (primary != null) {
-            p1 = primary.getPlayer1CFHandle(); p2 = primary.getPlayer2CFHandle(); tournamentId = primary.getTournamentId();
+            p1 = primary.getPlayer1CFHandle(); p2 = primary.getPlayer2CFHandle();
+            u1 = primary.getUser1(); u2 = primary.getUser2();
+            id1 = primary.getPlayer1Id(); id2 = primary.getPlayer2Id();
+            tournamentId = primary.getTournamentId();
         } else {
             MatchSecondary secondary = matchRepository2.findByInviteCode(code)
                     .orElseGet(() -> matchRepository2.findById(ident).orElse(null));
             if (secondary == null) return false;
-            p1 = secondary.getPlayer1CFHandle(); p2 = secondary.getPlayer2CFHandle(); tournamentId = secondary.getTournamentId();
+            p1 = secondary.getPlayer1CFHandle(); p2 = secondary.getPlayer2CFHandle();
+            u1 = secondary.getUser1(); u2 = secondary.getUser2();
+            id1 = secondary.getPlayer1Id(); id2 = secondary.getPlayer2Id();
+            tournamentId = secondary.getTournamentId();
         }
 
-        String handle = user.getCfHandle();
-        if (handle != null && !handle.isBlank() && isPlayer(handle, p1, p2)) return true;
+        if (user != null) {
+            String cf = user.getCfHandle();
+            String uid = user.getId();
+            String uEmail = user.getEmail();
+            if (matchesPlayer(p1, u1, id1, cf, uid, uEmail, trimmed) || matchesPlayer(p2, u2, id2, cf, uid, uEmail, trimmed)) {
+                return true;
+            }
+        } else {
+            if (matchesDirect(p1, u1, id1, trimmed) || matchesDirect(p2, u2, id2, trimmed)) {
+                return true;
+            }
+        }
+
         if (tournamentId != null) {
             CF_DuelProject.CF_DuelProject.model.Tournament t = tournamentRepository.findById(tournamentId).orElse(null);
             if (t != null) {
-                if (t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(email)) return true;
-                if (handle != null && t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(handle)) return true;
+                if (t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(trimmed)) return true;
+                if (user != null && user.getCfHandle() != null && t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(user.getCfHandle())) return true;
+                if (t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(trimmed)) return true;
             }
         }
         return false;
@@ -762,7 +829,8 @@ public class MatchService {
     }
 
     private boolean isPlayer(String handle, String p1, String p2) {
-        return handle.equalsIgnoreCase(p1) || handle.equalsIgnoreCase(p2);
+        return (handle != null && p1 != null && handle.equalsIgnoreCase(p1))
+                || (handle != null && p2 != null && handle.equalsIgnoreCase(p2));
     }
 
     public MatchSecondary stopMatchByCreator(String identifier, String requester) {
@@ -905,7 +973,6 @@ public class MatchService {
     }
 
     public void handleSkipVote(String inviteCode, String cfHandle) {
-
         if (inviteCode == null || cfHandle == null) return;
 
         MatchPrimary match = matchRepository.findByInviteCode(normalizeCode(inviteCode)).orElse(null);
@@ -926,11 +993,35 @@ public class MatchService {
         }
 
         // Determine which player is voting
-        boolean isUser1 = cfHandle.equalsIgnoreCase(match.getPlayer1CFHandle()) || cfHandle.equalsIgnoreCase(match.getUser1());
-        boolean isUser2 = cfHandle.equalsIgnoreCase(match.getPlayer2CFHandle()) || cfHandle.equalsIgnoreCase(match.getUser2());
+        boolean isUser1 = cfHandle.equalsIgnoreCase(match.getPlayer1CFHandle())
+                || cfHandle.equalsIgnoreCase(match.getUser1())
+                || cfHandle.equalsIgnoreCase(match.getPlayer1Id());
+        boolean isUser2 = cfHandle.equalsIgnoreCase(match.getPlayer2CFHandle())
+                || cfHandle.equalsIgnoreCase(match.getUser2())
+                || cfHandle.equalsIgnoreCase(match.getPlayer2Id());
 
         if (!isUser1 && !isUser2) {
-            log.debug("Skip vote ignored — sender is not a player in this match");
+            String trimmed = cfHandle.trim();
+            User user = userRepository.findByEmail(trimmed)
+                    .orElseGet(() -> userRepository.findByEmail(trimmed.toLowerCase())
+                    .orElseGet(() -> userRepository.findById(trimmed)
+                    .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(trimmed)
+                    .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(trimmed)
+                    .orElse(null)))));
+            if (user != null) {
+                String h = user.getCfHandle();
+                String id = user.getId();
+                String em = user.getEmail();
+                if (matchesPlayer(match.getPlayer1CFHandle(), match.getUser1(), match.getPlayer1Id(), h, id, em, trimmed)) {
+                    isUser1 = true;
+                } else if (matchesPlayer(match.getPlayer2CFHandle(), match.getUser2(), match.getPlayer2Id(), h, id, em, trimmed)) {
+                    isUser2 = true;
+                }
+            }
+        }
+
+        if (!isUser1 && !isUser2) {
+            log.debug("Skip vote ignored — sender is not a player in this match: {}", cfHandle);
             return;
         }
 
@@ -972,6 +1063,41 @@ public class MatchService {
             skipNotification.put("skipVoteUser1", fresh.isSkipVoteUser1());
             skipNotification.put("skipVoteUser2", fresh.isSkipVoteUser2());
             messagingTemplate.convertAndSend("/topic/match/" + match.getInviteCode() + "/skip", skipNotification);
+            publishMatchUpdate(fresh);
         }
+    }
+
+    public void sendChatMessage(String inviteCode, String senderEmailOrId, String text) {
+        String handle = resolveParticipantHandle(senderEmailOrId, inviteCode);
+        if (handle == null || text == null || text.isBlank()) return;
+        String cleaned = text.strip();
+        if (cleaned.length() > 500) cleaned = cleaned.substring(0, 500);
+
+        ChatMessage msg = new ChatMessage();
+        msg.setInviteCode(normalizeCode(inviteCode));
+        msg.setSender(handle);
+        msg.setText(cleaned);
+
+        messagingTemplate.convertAndSend(
+            "/topic/match/" + normalizeCode(inviteCode) + "/chat",
+            msg
+        );
+    }
+
+    public void sendEmoteMessage(String inviteCode, String senderEmailOrId, String emote) {
+        String handle = resolveParticipantHandle(senderEmailOrId, inviteCode);
+        if (handle == null || emote == null || emote.isBlank()) return;
+        String cleaned = emote.strip();
+        if (cleaned.length() > 32) cleaned = cleaned.substring(0, 32);
+
+        EmoteMessage msg = new EmoteMessage();
+        msg.setInviteCode(normalizeCode(inviteCode));
+        msg.setSender(handle);
+        msg.setEmote(cleaned);
+
+        messagingTemplate.convertAndSend(
+            "/topic/match/" + normalizeCode(inviteCode) + "/emotes",
+            msg
+        );
     }
 }

@@ -22,6 +22,7 @@ public class User {
     private String provider; 
 
     private String cfHandle;
+    private Integer rating;
     private boolean cfVerified = false;
 
     // Codeforces verification fields

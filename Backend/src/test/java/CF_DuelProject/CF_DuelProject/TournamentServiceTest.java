@@ -27,6 +27,7 @@ import CF_DuelProject.CF_DuelProject.repository.PrimaryMatchRepository;
 import CF_DuelProject.CF_DuelProject.repository.SecondaryMatchRepository;
 import CF_DuelProject.CF_DuelProject.repository.TournamentRepository;
 import CF_DuelProject.CF_DuelProject.repository.UserRepository;
+import CF_DuelProject.CF_DuelProject.service.CodeforcesService;
 import CF_DuelProject.CF_DuelProject.service.TournamentService;
 
 /** Mock-based tests of tournament advancement rules (no database). */
@@ -34,14 +35,16 @@ class TournamentServiceTest {
 
     private TournamentRepository tournaments;
     private SecondaryMatchRepository matches;
+    private CodeforcesService codeforcesService;
     private TournamentService service;
 
     @BeforeEach
     void setUp() {
         tournaments = mock(TournamentRepository.class);
         matches = mock(SecondaryMatchRepository.class);
+        codeforcesService = mock(CodeforcesService.class);
         service = new TournamentService(tournaments, mock(PrimaryMatchRepository.class), matches,
-                mock(UserRepository.class), mock(SimpMessagingTemplate.class));
+                mock(UserRepository.class), mock(SimpMessagingTemplate.class), codeforcesService);
         when(tournaments.save(any(Tournament.class))).thenAnswer(inv -> inv.getArgument(0));
         when(matches.save(any(MatchSecondary.class))).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -143,6 +146,106 @@ class TournamentServiceTest {
 
         assertEquals("FINISHED", out.getStatus());
         assertTrue(List.of("alice", "bob").contains(out.getWinnerId()));
+    }
+
+    @Test
+    void advance_drawAdvancesPlayerWithHigherRating_player1() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("ONGOING");
+        t.setMatchDurationMinutes(30);
+        t.setCurrentRound(1);
+        t.setBracket(new HashMap<>());
+        t.getBracket().put(1, new ArrayList<>(List.of("alice", "bob")));
+        t.setMatchCodes(new HashMap<>());
+        t.getMatchCodes().put(1, new ArrayList<>(List.of("M1")));
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+        result("M1", "FINISHED", "DRAW");
+
+        // Alice (1800) vs Bob (1400) -> Alice has higher rating, so Alice advances
+        when(codeforcesService.getUserRating("alice")).thenReturn(1800);
+        when(codeforcesService.getUserRating("bob")).thenReturn(1400);
+
+        Tournament out = service.advanceRoundManual("t1", "alice");
+
+        assertEquals("FINISHED", out.getStatus());
+        assertEquals("alice", out.getWinnerId());
+    }
+
+    @Test
+    void advance_drawAdvancesPlayerWithHigherRating_player2() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("ONGOING");
+        t.setMatchDurationMinutes(30);
+        t.setCurrentRound(1);
+        t.setBracket(new HashMap<>());
+        t.getBracket().put(1, new ArrayList<>(List.of("alice", "bob")));
+        t.setMatchCodes(new HashMap<>());
+        t.getMatchCodes().put(1, new ArrayList<>(List.of("M1")));
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+        result("M1", "FINISHED", "DRAW");
+
+        // Alice (1200) vs Bob (1750) -> Bob has higher rating, so Bob advances
+        when(codeforcesService.getUserRating("alice")).thenReturn(1200);
+        when(codeforcesService.getUserRating("bob")).thenReturn(1750);
+
+        Tournament out = service.advanceRoundManual("t1", "alice");
+
+        assertEquals("FINISHED", out.getStatus());
+        assertEquals("bob", out.getWinnerId());
+    }
+
+    @Test
+    void advance_drawWithSameRatingPerformsCoinFlip() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("ONGOING");
+        t.setMatchDurationMinutes(30);
+        t.setCurrentRound(1);
+        t.setBracket(new HashMap<>());
+        t.getBracket().put(1, new ArrayList<>(List.of("alice", "bob")));
+        t.setMatchCodes(new HashMap<>());
+        t.getMatchCodes().put(1, new ArrayList<>(List.of("M1")));
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+        result("M1", "FINISHED", "DRAW");
+
+        // Both players have identical rating: 1500 == 1500
+        when(codeforcesService.getUserRating("alice")).thenReturn(1500);
+        when(codeforcesService.getUserRating("bob")).thenReturn(1500);
+
+        Tournament out = service.advanceRoundManual("t1", "alice");
+
+        assertEquals("FINISHED", out.getStatus());
+        assertTrue(List.of("alice", "bob").contains(out.getWinnerId()));
+    }
+
+    @Test
+    void advance_drawWithUnratedPlayer_ratedAdvances() {
+        Tournament t = new Tournament();
+        t.setId("t1");
+        t.setCreatorId("alice");
+        t.setStatus("ONGOING");
+        t.setMatchDurationMinutes(30);
+        t.setCurrentRound(1);
+        t.setBracket(new HashMap<>());
+        t.getBracket().put(1, new ArrayList<>(List.of("alice", "bob")));
+        t.setMatchCodes(new HashMap<>());
+        t.getMatchCodes().put(1, new ArrayList<>(List.of("M1")));
+        when(tournaments.findById("t1")).thenReturn(Optional.of(t));
+        result("M1", "FINISHED", "DRAW");
+
+        // Alice has 1300, Bob is unrated (returns 0 or null)
+        when(codeforcesService.getUserRating("alice")).thenReturn(1300);
+        when(codeforcesService.getUserRating("bob")).thenReturn(0);
+
+        Tournament out = service.advanceRoundManual("t1", "alice");
+
+        assertEquals("FINISHED", out.getStatus());
+        assertEquals("alice", out.getWinnerId());
     }
 
     @Test

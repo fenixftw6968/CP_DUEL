@@ -72,6 +72,42 @@ public class CodeforcesService {
         }
     }
 
+    private final Map<String, Integer> ratingCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Retrieves the current Codeforces rating for a user.
+     * Returns 0 for unrated users, or null if Codeforces API is unreachable and no cached rating exists.
+     */
+    public Integer getUserRating(String handle) {
+        if (handle == null || handle.trim().isEmpty()) return null;
+        String key = handle.trim().toLowerCase();
+        Integer cached = ratingCache.get(key);
+        if (cached != null) return cached;
+
+        try {
+            Map<String, Object> details = verifyHandle(handle.trim());
+            Object r = details.get("rating");
+            if (r instanceof Number num) {
+                int rating = num.intValue();
+                ratingCache.put(key, rating);
+                return rating;
+            } else {
+                // unrated on Codeforces
+                ratingCache.put(key, 0);
+                return 0;
+            }
+        } catch (Exception e) {
+            log.warn("Could not retrieve rating for handle {}: {}", handle, e.getMessage());
+            return null;
+        }
+    }
+
+    public void setCachedRating(String handle, int rating) {
+        if (handle != null) {
+            ratingCache.put(handle.trim().toLowerCase(), rating);
+        }
+    }
+
     // ───────────────────────── solve detection ─────────────────────────
 
     /** Minimum gap between two calls to the Codeforces API (CF allows at most 1 request / 2 s). */
