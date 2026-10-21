@@ -11,7 +11,7 @@ import CF_DuelProject.CF_DuelProject.dto.ChatMessage;
 import CF_DuelProject.CF_DuelProject.dto.EmoteMessage;
 import CF_DuelProject.CF_DuelProject.dto.SkipVoteMessage;
 import CF_DuelProject.CF_DuelProject.service.MatchService;
-import lombok.RequiredArgsConstructor;
+import CF_DuelProject.CF_DuelProject.service.TournamentService;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -19,7 +19,6 @@ import lombok.extern.slf4j.Slf4j;
  * checked against the match's players — the {@code sender} field sent by the client is ignored.
  */
 @Controller
-@RequiredArgsConstructor
 @Slf4j
 public class MatchSocketController {
 
@@ -28,6 +27,18 @@ public class MatchSocketController {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final MatchService matchService;
+    private final TournamentService tournamentService;
+
+    public MatchSocketController(SimpMessagingTemplate messagingTemplate, MatchService matchService) {
+        this(messagingTemplate, matchService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public MatchSocketController(SimpMessagingTemplate messagingTemplate, MatchService matchService, @org.springframework.context.annotation.Lazy TournamentService tournamentService) {
+        this.messagingTemplate = messagingTemplate;
+        this.matchService = matchService;
+        this.tournamentService = tournamentService;
+    }
 
     @MessageMapping("/match/chat")
     public void handleChat(@Payload ChatMessage message, Principal principal) {
@@ -38,10 +49,15 @@ public class MatchSocketController {
         if (text.length() > MAX_CHAT_LENGTH) text = text.substring(0, MAX_CHAT_LENGTH);
         message.setText(text);
         message.setSender(handle);
+        String code = MatchService.normalizeCode(message.getInviteCode());
         messagingTemplate.convertAndSend(
-            "/topic/match/" + MatchService.normalizeCode(message.getInviteCode()) + "/chat",
+            "/topic/match/" + code + "/chat",
             message
         );
+        if (tournamentService != null && tournamentService.isTournament(message.getInviteCode())) {
+            messagingTemplate.convertAndSend("/topic/tournament/" + message.getInviteCode() + "/chat", message);
+            messagingTemplate.convertAndSend("/topic/tournament/" + code + "/chat", message);
+        }
     }
 
     @MessageMapping("/match/emote")
@@ -53,10 +69,15 @@ public class MatchSocketController {
         if (emote.length() > MAX_EMOTE_LENGTH) emote = emote.substring(0, MAX_EMOTE_LENGTH);
         message.setEmote(emote);
         message.setSender(handle);
+        String code = MatchService.normalizeCode(message.getInviteCode());
         messagingTemplate.convertAndSend(
-            "/topic/match/" + MatchService.normalizeCode(message.getInviteCode()) + "/emotes",
+            "/topic/match/" + code + "/emotes",
             message
         );
+        if (tournamentService != null && tournamentService.isTournament(message.getInviteCode())) {
+            messagingTemplate.convertAndSend("/topic/tournament/" + message.getInviteCode() + "/emotes", message);
+            messagingTemplate.convertAndSend("/topic/tournament/" + code + "/emotes", message);
+        }
     }
 
     @MessageMapping("/match/skip")

@@ -113,6 +113,53 @@ const css = `
     .tb-main { padding: 24px 20px; }
     .tb-header { flex-direction: column; align-items: flex-start; gap: 16px; }
   }
+
+  /* ── Arena Chat Box ── */
+  .mr-chat { position:fixed; bottom:24px; right:24px; width:320px; z-index:500; display:flex; flex-direction:column; gap:0; font-family:'IBM Plex Mono', monospace; }
+  .mr-chat-toggle { display:flex; align-items:center; gap:10px; background:#191920; border:1px solid #2e2e3a; border-radius:6px; padding:10px 16px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#808090; transition:color .15s,border-color .15s; }
+  .mr-chat-toggle:hover { color:#f0f0f6; border-color:rgba(200,255,0,0.3); }
+  .mr-chat-unread { background:#c8ff00; color:#06060a; font-size:9px; font-weight:700; border-radius:99px; padding:2px 7px; margin-left:auto; }
+  .mr-chat-panel { background:#101014; border:1px solid #2e2e3a; border-radius:6px 6px 0 0; overflow:hidden; display:flex; flex-direction:column; animation:chatSlideUp .25s cubic-bezier(0.22,1,0.36,1); }
+  @keyframes chatSlideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+  .mr-chat-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #22222c; background:#0c0c10; }
+  .mr-chat-head-lbl { font-size:9px; letter-spacing:0.24em; text-transform:uppercase; color:#808090; display:flex; align-items:center; gap:8px; }
+  .mr-chat-live-dot { width:6px; height:6px; border-radius:50%; background:#c8ff00; animation:pulseLive 1.6s infinite; }
+  .mr-chat-close { background:none; border:none; cursor:pointer; color:#50505e; font-size:16px; line-height:1; padding:0 2px; transition:color .15s; }
+  .mr-chat-close:hover { color:#f0f0f6; }
+  .mr-chat-msgs { height:220px; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; scrollbar-width:thin; scrollbar-color:#2e2e3a transparent; }
+  .mr-chat-msgs::-webkit-scrollbar { width:4px; }
+  .mr-chat-msgs::-webkit-scrollbar-thumb { background:#2e2e3a; border-radius:99px; }
+  .mr-chat-msg { display:flex; flex-direction:column; gap:2px; animation:msgIn .18s ease; }
+  @keyframes msgIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .mr-chat-msg.mine { align-items:flex-end; }
+  .mr-chat-sender { font-size:9px; letter-spacing:0.1em; color:#50505e; text-transform:uppercase; }
+  .mr-chat-bubble { font-size:12px; padding:7px 12px; border-radius:6px; max-width:88%; word-break:break-word; line-height:1.5; }
+  .mr-chat-msg:not(.mine) .mr-chat-bubble { background:#141419; border:1px solid #22222c; color:#c0c0cc; border-radius:4px 12px 12px 12px; }
+  .mr-chat-msg.mine .mr-chat-bubble { background:rgba(200,255,0,0.1); border:1px solid rgba(200,255,0,0.2); color:rgba(200,255,0,0.85); border-radius:12px 4px 12px 12px; }
+  .mr-chat-empty { font-size:11px; color:#50505e; text-align:center; padding:20px 0; letter-spacing:0.06em; }
+  .mr-chat-input-row { display:flex; border-top:1px solid #22222c; }
+  .mr-chat-input { flex:1; background:none; border:none; outline:none; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#f0f0f6; padding:11px 14px; }
+  .mr-chat-input::placeholder { color:#50505e; }
+  .mr-chat-send { background:none; border:none; border-left:1px solid #22222c; padding:0 14px; cursor:pointer; font-size:16px; color:#c8ff00; transition:background .15s; }
+  .mr-chat-send:hover { background:rgba(200,255,0,0.06); }
+
+  /* ── Emote Board ── */
+  .mr-emote-board { display:flex; align-items:center; gap:6px; padding:10px 14px; border-top:1px solid #22222c; background:#0c0c10; overflow-x:auto; scrollbar-width:none; }
+  .mr-emote-board::-webkit-scrollbar { display:none; }
+  .mr-emote-btn { background:none; border:1px solid #22222c; border-radius:6px; padding:5px 9px; font-size:18px; cursor:pointer; transition:transform .1s, border-color .15s, background .15s; flex-shrink:0; }
+  .mr-emote-btn:hover { transform:scale(1.3); border-color:#3a3a48; background:#141419; }
+  .mr-emote-btn:active { transform:scale(0.9); }
+
+  /* ── Floating Emote Animation ── */
+  .mr-emote-overlay { position:fixed; inset:0; z-index:600; pointer-events:none; overflow:hidden; }
+  .mr-float-emote { position:absolute; bottom:10%; font-size:80px; animation:floatEmote 2.2s cubic-bezier(0.22,1,0.36,1) forwards; pointer-events:none; filter:drop-shadow(0 0 24px rgba(200,255,0,0.4)); }
+  @keyframes floatEmote {
+    0%   { transform:translateY(0)   scale(0.3) rotate(-15deg); opacity:0; }
+    12%  { transform:translateY(-40px) scale(1.4) rotate(8deg);  opacity:1; }
+    40%  { transform:translateY(-180px) scale(1.1) rotate(-4deg); opacity:1; }
+    80%  { transform:translateY(-380px) scale(0.9) rotate(6deg);  opacity:0.6; }
+    100% { transform:translateY(-520px) scale(0.7) rotate(-2deg); opacity:0; }
+  }
 `
 
 export default function TournamentBracket() {
@@ -126,10 +173,35 @@ export default function TournamentBracket() {
   const [tData, setTData] = useState(null)
   const [rounds, setRounds] = useState({})
   const [loading, setLoading] = useState(true)
-  const [myHandle, setMyHandle] = useState(localStorage.getItem('cfHandle') || '')
+  const [myHandle, setMyHandle] = useState(() => localStorage.getItem('cfHandle') || '')
   const [startingRound, setStartingRound] = useState(false)
   const [startingTournament, setStartingTournament] = useState(false)
   const [toast, setToast] = useState(null)
+
+  // ── Arena Chat & Emotes state ──
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatMsgs, setChatMsgs] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [floatEmotes, setFloatEmotes] = useState([])
+  const chatEndRef = useRef(null)
+  const lastAutoNavMatchRef = useRef(null)
+
+  const EMOTES = ['🔥', '💀', '🚀', '🤡', '💩', '😤', '🧠', '⚡']
+
+  const isMine = (sender) => {
+    if (!sender) return false
+    if (sender === 'you') return true
+    if (myHandle && sender.trim().toLowerCase() === myHandle.trim().toLowerCase()) return true
+    return false
+  }
+
+  const triggerFloatEmote = (emote) => {
+    const eid = Date.now() + Math.random()
+    const x = 10 + Math.random() * 80
+    setFloatEmotes(prev => [...prev, { id: eid, emote, x }])
+    setTimeout(() => setFloatEmotes(prev => prev.filter(e => e.id !== eid)), 2400)
+  }
 
   const wsRef = useRef(null)
 
@@ -218,6 +290,9 @@ export default function TournamentBracket() {
   }, [])
 
   const fetchBracket = () => {
+    if (id) {
+      localStorage.setItem('activeTournamentId', id)
+    }
     axiosInstance.get(`${API_PATHS.TOURNAMENT.BRACKET}/${id}/bracket`)
       .then(res => {
         setTData(res.data?.tournament || null)
@@ -225,6 +300,90 @@ export default function TournamentBracket() {
         setLoading(false)
       })
       .catch(() => setLoading(false))
+  }
+
+  // ── Auto-scroll chat ──
+  useEffect(() => {
+    if (chatOpen) chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMsgs, chatOpen])
+
+  useEffect(() => {
+    if (chatOpen) setUnreadCount(0)
+  }, [chatOpen])
+
+  // ── Auto-navigate player into match room when round starts ──
+  useEffect(() => {
+    if (!myHandle || !rounds) return
+    for (const rNum of Object.keys(rounds)) {
+      const list = rounds[rNum] || []
+      const active = list.find(m => isMyMatch(m) && m.status === 'ONGOING' && m.inviteCode)
+      if (active && (!lastAutoNavMatchRef.current || lastAutoNavMatchRef.current !== active.inviteCode)) {
+        lastAutoNavMatchRef.current = active.inviteCode
+        showToast('Your match is live! Entering match room…')
+        navigate(`/match/${active.inviteCode}`)
+        break
+      }
+    }
+  }, [rounds, myHandle, navigate])
+
+  const sendChat = async () => {
+    const text = chatInput.trim()
+    if (!text) return
+    const curToken = localStorage.getItem('token') || ''
+    const headers = curToken ? { Authorization: `Bearer ${curToken}`, authorization: `Bearer ${curToken}` } : {}
+
+    setChatInput('')
+
+    let sentViaWs = false
+    if (wsRef.current && wsRef.current.connected) {
+      try {
+        wsRef.current.send('/app/match/chat', headers, JSON.stringify({
+          inviteCode: id,
+          sender: myHandle || 'you',
+          text,
+        }))
+        sentViaWs = true
+      } catch (err) {
+        console.warn('WS sendChat failed, falling back to REST:', err)
+      }
+    }
+
+    if (!sentViaWs) {
+      try {
+        await axiosInstance.post(API_PATHS.MATCH.CHAT, {
+          inviteCode: id,
+          sender: myHandle || 'you',
+          text,
+        })
+      } catch (err) {
+        console.error('Failed to send tournament chat:', err)
+        showToast('Failed to send chat message', 'error')
+      }
+    }
+  }
+
+  const sendEmote = async (emote) => {
+    if (!emote) return
+    const curToken = localStorage.getItem('token') || ''
+    const headers = curToken ? { Authorization: `Bearer ${curToken}`, authorization: `Bearer ${curToken}` } : {}
+
+    if (wsRef.current && wsRef.current.connected) {
+      try {
+        wsRef.current.send('/app/match/emote', headers, JSON.stringify({
+          inviteCode: id,
+          sender: myHandle || 'you',
+          emote,
+        }))
+      } catch (err) {}
+    } else {
+      try {
+        await axiosInstance.post(API_PATHS.MATCH.EMOTE, {
+          inviteCode: id,
+          sender: myHandle || 'you',
+          emote,
+        })
+      } catch (err) {}
+    }
   }
 
   useEffect(() => {
@@ -238,10 +397,42 @@ export default function TournamentBracket() {
         const client = window.Stomp.over(sock)
         client.debug = () => {}
         const curToken = localStorage.getItem('token')
-        const headers = curToken ? { Authorization: `Bearer ${curToken}` } : {}
+        const headers = curToken ? { Authorization: `Bearer ${curToken}`, authorization: `Bearer ${curToken}` } : {}
         client.connect(headers, () => {
           client.subscribe(`/topic/tournament/${id}`, () => {
             fetchBracket()
+          })
+          client.subscribe(`/topic/tournament/${id}/chat`, (msg) => {
+            try {
+              const data = JSON.parse(msg.body)
+              setChatMsgs(prev => [...prev, data])
+              setChatOpen(prev => {
+                if (!prev) setUnreadCount(c => c + 1)
+                return prev
+              })
+            } catch {}
+          })
+          client.subscribe(`/topic/match/${id}/chat`, (msg) => {
+            try {
+              const data = JSON.parse(msg.body)
+              setChatMsgs(prev => [...prev, data])
+              setChatOpen(prev => {
+                if (!prev) setUnreadCount(c => c + 1)
+                return prev
+              })
+            } catch {}
+          })
+          client.subscribe(`/topic/tournament/${id}/emotes`, (msg) => {
+            try {
+              const data = JSON.parse(msg.body)
+              triggerFloatEmote(data.emote)
+            } catch {}
+          })
+          client.subscribe(`/topic/match/${id}/emotes`, (msg) => {
+            try {
+              const data = JSON.parse(msg.body)
+              triggerFloatEmote(data.emote)
+            } catch {}
           })
         }, () => {})
         wsRef.current = client
@@ -481,20 +672,43 @@ export default function TournamentBracket() {
                             )}
 
                             {/* PLAY BUTTON FOR PARTICIPANT */}
-                            {mine && m.status === 'ONGOING' && !isBye && (
+                            {mine && !isBye && (m.status === 'READY' || m.status === 'ONGOING') && (
                               <button 
                                 className="tb-play-btn"
-                                onClick={() => navigate(`/match/${m.inviteCode}`)}
+                                onClick={() => {
+                                  localStorage.setItem('activeTournamentId', id)
+                                  localStorage.setItem(`tournament_match_${m.inviteCode}`, id)
+                                  navigate(`/match/${m.inviteCode}`, { state: { tournamentId: id } })
+                                }}
                               >
-                                ▶ Play Match
+                                {m.status === 'ONGOING' ? '▶ Play Match' : '🎮 Enter Match Room'}
+                              </button>
+                            )}
+
+                            {/* FINISHED MATCH RESULTS BUTTON */}
+                            {!isBye && m.inviteCode && m.status === 'FINISHED' && (
+                              <button
+                                className="tb-monitor-btn"
+                                onClick={() => {
+                                  localStorage.setItem('activeTournamentId', id)
+                                  localStorage.setItem(`tournament_match_${m.inviteCode}`, id)
+                                  navigate(`/results/${m.inviteCode}`, { state: { tournamentId: id } })
+                                }}
+                                title="View match scorecard and problem breakdown"
+                              >
+                                📊 Results
                               </button>
                             )}
 
                             {/* REFEREE / SPECTATOR MONITOR BUTTON */}
-                            {!isBye && m.inviteCode && (m.status === 'ONGOING' || m.status === 'FINISHED') && (!mine || isReferee) && (
+                            {!isBye && m.inviteCode && (m.status === 'READY' || m.status === 'ONGOING') && (!mine || isReferee) && (
                               <button 
                                 className="tb-monitor-btn"
-                                onClick={() => navigate(`/match/${m.inviteCode}`)}
+                                onClick={() => {
+                                  localStorage.setItem('activeTournamentId', id)
+                                  localStorage.setItem(`tournament_match_${m.inviteCode}`, id)
+                                  navigate(`/match/${m.inviteCode}`, { state: { role: isReferee ? 'host' : 'spectator', tournamentId: id } })
+                                }}
                                 title="Monitor live scores and results"
                               >
                                 {isReferee ? '👁 Referee Monitor' : '👁 Spectate'}
@@ -510,6 +724,62 @@ export default function TournamentBracket() {
             )}
           </div>
         </main>
+
+        {/* ── Floating Emote Overlay ── */}
+        <div className="mr-emote-overlay">
+          {floatEmotes.map(({ id: eid, emote, x }) => (
+            <div key={eid} className="mr-float-emote" style={{ left: `${x}%` }}>{emote}</div>
+          ))}
+        </div>
+
+        {/* ── Arena Chat Box ── */}
+        <div className="mr-chat">
+          {chatOpen && (
+            <div className="mr-chat-panel">
+              <div className="mr-chat-head">
+                <span className="mr-chat-head-lbl">
+                  <span className="mr-chat-live-dot" />
+                  Tournament Arena Chat
+                </span>
+                <button className="mr-chat-close" onClick={() => setChatOpen(false)}>✕</button>
+              </div>
+              <div className="mr-chat-msgs">
+                {chatMsgs.length === 0 && <div className="mr-chat-empty">No messages yet. Chat with participants!</div>}
+                {chatMsgs.map((m, i) => (
+                  <div key={i} className={`mr-chat-msg ${isMine(m.sender) ? 'mine' : ''}`}>
+                    <span className="mr-chat-sender">{m.sender}</span>
+                    <div className="mr-chat-bubble">{m.text}</div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+              {/* Emote board */}
+              <div className="mr-emote-board">
+                {EMOTES.map(e => (
+                  <button key={e} className="mr-emote-btn" onClick={() => sendEmote(e)} title="Send emote">{e}</button>
+                ))}
+              </div>
+              <div className="mr-chat-input-row">
+                <input
+                  className="mr-chat-input"
+                  placeholder="Message participants…"
+                  value={chatInput}
+                  onChange={ev => setChatInput(ev.target.value)}
+                  onKeyDown={ev => ev.key === 'Enter' && sendChat()}
+                />
+                <button className="mr-chat-send" onClick={sendChat}>↑</button>
+              </div>
+            </div>
+          )}
+          <button className="mr-chat-toggle" onClick={() => setChatOpen(o => !o)}>
+            💬 <span>Arena Chat</span>
+            {!chatOpen && unreadCount > 0 && (
+              <span className="mr-chat-unread">{unreadCount}</span>
+            )}
+          </button>
+        </div>
+
+        {toast && <div className={`tb-toast ${toast.type === 'error' ? 'error' : ''}`}>{toast.text}</div>}
       </div>
     </>
   )

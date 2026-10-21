@@ -21,6 +21,7 @@ import CF_DuelProject.CF_DuelProject.dto.EmoteMessage;
 import CF_DuelProject.CF_DuelProject.dto.SolveResult;
 import CF_DuelProject.CF_DuelProject.model.MatchPrimary;
 import CF_DuelProject.CF_DuelProject.model.MatchSecondary;
+import CF_DuelProject.CF_DuelProject.model.Tournament;
 import CF_DuelProject.CF_DuelProject.model.User;
 import CF_DuelProject.CF_DuelProject.repository.PrimaryMatchRepository;
 import CF_DuelProject.CF_DuelProject.repository.SecondaryMatchRepository;
@@ -562,6 +563,110 @@ public class MatchService {
 
         return saved;
     }
+
+    public MatchPrimary startTournamentMatch(Tournament t, String rawInviteCode) {
+        String inviteCode = normalizeCode(rawInviteCode);
+
+        MatchSecondary secondary = matchRepository2.findByInviteCode(inviteCode)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invalid code"));
+
+        if (!"READY".equals(secondary.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Player 2 not joined/ready");
+        }
+
+        String p1Handle = resolveVerifiedCfHandle(secondary.getPlayer1CFHandle(), secondary.getUser1());
+        String p2Handle = resolveVerifiedCfHandle(secondary.getPlayer2CFHandle(), secondary.getUser2());
+
+        validateVerifiedHandle(p1Handle);
+        validateVerifiedHandle(p2Handle);
+
+        List<String> problemUrls;
+        try {
+            problemUrls = problemService.getMatchProblems(p1Handle, p2Handle, secondary.getDifficulty());
+        } catch (Exception e) {
+            log.warn("Failed to fetch problems for tournament match {}: {}", secondary.getInviteCode(), e.getMessage());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not select problems right now. Please try starting again.");
+        }
+        if (problemUrls == null || problemUrls.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Could not select problems right now. Please try starting again.");
+        }
+
+        Date startTime;
+        Date endTime;
+        if (t != null && t.getRoundStartTime() != null && t.getRoundEndTime() != null) {
+            startTime = t.getRoundStartTime();
+            endTime = t.getRoundEndTime();
+        } else if (secondary.getTournamentId() != null) {
+            Tournament foundT = tournamentRepository.findById(secondary.getTournamentId()).orElse(null);
+            if (foundT != null && foundT.getRoundStartTime() != null && foundT.getRoundEndTime() != null) {
+                startTime = foundT.getRoundStartTime();
+                endTime = foundT.getRoundEndTime();
+            } else {
+                startTime = new Date();
+                long durationMillis = (secondary.getDurationMinutes() > 0 ? secondary.getDurationMinutes() : 30) * 60 * 1000L;
+                endTime = new Date(startTime.getTime() + durationMillis);
+            }
+        } else {
+            startTime = new Date();
+            long durationMillis = (secondary.getDurationMinutes() > 0 ? secondary.getDurationMinutes() : 30) * 60 * 1000L;
+            endTime = new Date(startTime.getTime() + durationMillis);
+        }
+
+        MatchPrimary primary = new MatchPrimary();
+        primary.setUser1(p1Handle);
+        primary.setUser2(p2Handle);
+        primary.setPlayer1CFHandle(p1Handle);
+        primary.setPlayer2CFHandle(p2Handle);
+
+        String id1 = secondary.getPlayer1Id();
+        if (id1 == null) {
+            id1 = userRepository.findByCodeforcesHandleIgnoreCase(p1Handle)
+                    .or(() -> userRepository.findByCfHandleIgnoreCase(p1Handle))
+                    .map(User::getId).orElse(null);
+        }
+        String id2 = secondary.getPlayer2Id();
+        if (id2 == null) {
+            id2 = userRepository.findByCodeforcesHandleIgnoreCase(p2Handle)
+                    .or(() -> userRepository.findByCfHandleIgnoreCase(p2Handle))
+                    .map(User::getId).orElse(null);
+        }
+        primary.setPlayer1Id(id1);
+        primary.setPlayer2Id(id2);
+        primary.setTournamentId(t != null ? t.getId() : secondary.getTournamentId());
+        primary.setBracketRound(secondary.getBracketRound());
+        primary.setDurationMinutes(secondary.getDurationMinutes() > 0 ? secondary.getDurationMinutes() : (int) ((endTime.getTime() - startTime.getTime()) / (60 * 1000)));
+        primary.setDifficulty(secondary.getDifficulty());
+        primary.setScore1(0);
+        primary.setScore2(0);
+        primary.setCurIdx(0);
+        primary.setStatus("ONGOING");
+        primary.setWinnerId(null);
+        primary.setStartTime(startTime);
+        primary.setEndTime(endTime);
+        primary.setInviteCode(secondary.getInviteCode());
+        primary.setProblems(problemUrls);
+
+        Query claim = new Query(Criteria.where("_id").is(secondary.getId()).and("status").is("READY"));
+        MatchSecondary claimed = mongoTemplate.findAndRemove(claim, MatchSecondary.class);
+        if (claimed == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Match has already been started");
+        }
+
+        MatchPrimary saved;
+        try {
+            saved = matchRepository.save(primary);
+        } catch (DuplicateKeyException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Match has already been started");
+        } catch (RuntimeException e) {
+            matchRepository2.save(claimed);
+            throw e;
+        }
+        publishMatchUpdate(saved);
+        return saved;
+    }
+
     public Map<String, Object> getMatchStatus(String inviteCode) {
         String normalizedCode = normalizeCode(inviteCode);
 
@@ -695,17 +800,12 @@ public class MatchService {
      */
     public String resolveParticipantHandle(String email, String inviteCode) {
         if (email == null || inviteCode == null || inviteCode.isBlank()) return null;
-        String code = normalizeCode(inviteCode);
-        MatchPrimary primary = matchRepository.findByInviteCode(code).orElse(null);
-        MatchSecondary secondary = primary == null ? matchRepository2.findByInviteCode(code).orElse(null) : null;
-        if (primary == null && secondary == null) return null;
-
-        String p1 = primary != null ? primary.getPlayer1CFHandle() : secondary.getPlayer1CFHandle();
-        String p2 = primary != null ? primary.getPlayer2CFHandle() : secondary.getPlayer2CFHandle();
-        String u1 = primary != null ? primary.getUser1() : secondary.getUser1();
-        String u2 = primary != null ? primary.getUser2() : secondary.getUser2();
-        String id1 = primary != null ? primary.getPlayer1Id() : secondary.getPlayer1Id();
-        String id2 = primary != null ? primary.getPlayer2Id() : secondary.getPlayer2Id();
+        String ident = inviteCode.trim();
+        String code = normalizeCode(ident);
+        MatchPrimary primary = matchRepository.findByInviteCode(code)
+                .orElseGet(() -> matchRepository.findById(ident).orElse(null));
+        MatchSecondary secondary = primary == null ? matchRepository2.findByInviteCode(code)
+                .orElseGet(() -> matchRepository2.findById(ident).orElse(null)) : null;
 
         String trimmed = email.trim();
         User user = userRepository.findByEmail(trimmed)
@@ -715,24 +815,98 @@ public class MatchService {
                 .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(trimmed)
                 .orElse(null)))));
 
-        if (user != null) {
-            String cf = user.getCfHandle();
-            String uid = user.getId();
-            String uEmail = user.getEmail();
-            if (matchesPlayer(p1, u1, id1, cf, uid, uEmail, trimmed)) {
-                return (cf != null && !cf.isBlank()) ? cf : (p1 != null ? p1 : (u1 != null ? u1 : trimmed));
+        if (primary != null || secondary != null) {
+            String p1 = primary != null ? primary.getPlayer1CFHandle() : secondary.getPlayer1CFHandle();
+            String p2 = primary != null ? primary.getPlayer2CFHandle() : secondary.getPlayer2CFHandle();
+            String u1 = primary != null ? primary.getUser1() : secondary.getUser1();
+            String u2 = primary != null ? primary.getUser2() : secondary.getUser2();
+            String id1 = primary != null ? primary.getPlayer1Id() : secondary.getPlayer1Id();
+            String id2 = primary != null ? primary.getPlayer2Id() : secondary.getPlayer2Id();
+            String tournamentId = primary != null ? primary.getTournamentId() : secondary.getTournamentId();
+
+            if (user != null) {
+                String cf = user.getCfHandle();
+                String uid = user.getId();
+                String uEmail = user.getEmail();
+                if (matchesPlayer(p1, u1, id1, cf, uid, uEmail, trimmed)) {
+                    return (cf != null && !cf.isBlank()) ? cf : (p1 != null ? p1 : (u1 != null ? u1 : trimmed));
+                }
+                if (matchesPlayer(p2, u2, id2, cf, uid, uEmail, trimmed)) {
+                    return (cf != null && !cf.isBlank()) ? cf : (p2 != null ? p2 : (u2 != null ? u2 : trimmed));
+                }
+            } else {
+                if (matchesDirect(p1, u1, id1, trimmed)) {
+                    return p1 != null ? p1 : (u1 != null ? u1 : trimmed);
+                }
+                if (matchesDirect(p2, u2, id2, trimmed)) {
+                    return p2 != null ? p2 : (u2 != null ? u2 : trimmed);
+                }
             }
-            if (matchesPlayer(p2, u2, id2, cf, uid, uEmail, trimmed)) {
-                return (cf != null && !cf.isBlank()) ? cf : (p2 != null ? p2 : (u2 != null ? u2 : trimmed));
+
+            // Tournament referee/host and admin can also chat in tournament matches
+            if (tournamentId != null) {
+                Tournament t = tournamentRepository.findById(tournamentId).orElse(null);
+                if (t != null) {
+                    boolean isHost = (t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(trimmed))
+                            || (user != null && user.getCfHandle() != null && t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(user.getCfHandle()))
+                            || (t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(trimmed))
+                            || (user != null && t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(user.getEmail()));
+                    if (isHost) {
+                        return (user != null && user.getCfHandle() != null && !user.getCfHandle().isBlank())
+                                ? user.getCfHandle() : (t.getCreatorId() != null ? t.getCreatorId() : trimmed);
+                    }
+                    if (t.getRegisteredPlayers() != null) {
+                        String cf = user != null ? user.getCfHandle() : trimmed;
+                        for (String p : t.getRegisteredPlayers()) {
+                            if (p != null && (p.equalsIgnoreCase(cf) || p.equalsIgnoreCase(trimmed))) {
+                                return (user != null && user.getCfHandle() != null && !user.getCfHandle().isBlank()) ? user.getCfHandle() : p;
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            if (matchesDirect(p1, u1, id1, trimmed)) {
-                return p1 != null ? p1 : (u1 != null ? u1 : trimmed);
+
+            if (user != null && user.isAdmin()) {
+                return (user.getCfHandle() != null && !user.getCfHandle().isBlank()) ? user.getCfHandle() : trimmed;
             }
-            if (matchesDirect(p2, u2, id2, trimmed)) {
-                return p2 != null ? p2 : (u2 != null ? u2 : trimmed);
+
+            return null;
+        }
+
+        // Tournament room chat resolution (when identifier is a Tournament ID or invite code)
+        Tournament tourney = tournamentRepository.findById(ident)
+                .orElseGet(() -> tournamentRepository.findByInviteCode(code)
+                .orElseGet(() -> tournamentRepository.findById(code).orElse(null)));
+
+        if (tourney != null) {
+            String cf = user != null ? user.getCfHandle() : trimmed;
+            boolean isHost = (tourney.getCreatorEmail() != null && tourney.getCreatorEmail().equalsIgnoreCase(trimmed))
+                    || (tourney.getCreatorId() != null && tourney.getCreatorId().equalsIgnoreCase(cf))
+                    || (tourney.getCreatorId() != null && tourney.getCreatorId().equalsIgnoreCase(trimmed))
+                    || (user != null && tourney.getCreatorEmail() != null && tourney.getCreatorEmail().equalsIgnoreCase(user.getEmail()));
+            if (isHost) {
+                return (user != null && user.getCfHandle() != null && !user.getCfHandle().isBlank())
+                        ? user.getCfHandle() : (tourney.getCreatorId() != null ? tourney.getCreatorId() : trimmed);
+            }
+            if (tourney.getRegisteredPlayers() != null) {
+                for (String p : tourney.getRegisteredPlayers()) {
+                    if (p != null && (p.equalsIgnoreCase(cf) || p.equalsIgnoreCase(trimmed))) {
+                        return (user != null && user.getCfHandle() != null && !user.getCfHandle().isBlank()) ? user.getCfHandle() : p;
+                    }
+                }
+            }
+            if (tourney.getJoinRequests() != null) {
+                for (String p : tourney.getJoinRequests()) {
+                    if (p != null && (p.equalsIgnoreCase(cf) || p.equalsIgnoreCase(trimmed))) {
+                        return (user != null && user.getCfHandle() != null && !user.getCfHandle().isBlank()) ? user.getCfHandle() : p;
+                    }
+                }
+            }
+            if (user != null && user.isAdmin()) {
+                return (user.getCfHandle() != null && !user.getCfHandle().isBlank()) ? user.getCfHandle() : trimmed;
             }
         }
+
         return null;
     }
 
@@ -788,7 +962,28 @@ public class MatchService {
         } else {
             MatchSecondary secondary = matchRepository2.findByInviteCode(code)
                     .orElseGet(() -> matchRepository2.findById(ident).orElse(null));
-            if (secondary == null) return false;
+            if (secondary == null) {
+                Tournament t = tournamentRepository.findById(ident)
+                        .orElseGet(() -> tournamentRepository.findByInviteCode(code).orElse(null));
+                if (t != null) {
+                    if (t.getCreatorEmail() != null && t.getCreatorEmail().equalsIgnoreCase(trimmed)) return true;
+                    if (user != null && user.getCfHandle() != null && t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(user.getCfHandle())) return true;
+                    if (t.getCreatorId() != null && t.getCreatorId().equalsIgnoreCase(trimmed)) return true;
+                    if (t.getRegisteredPlayers() != null) {
+                        String userCf = user != null ? user.getCfHandle() : trimmed;
+                        for (String p : t.getRegisteredPlayers()) {
+                            if (p != null && (p.equalsIgnoreCase(userCf) || p.equalsIgnoreCase(trimmed))) return true;
+                        }
+                    }
+                    if (t.getJoinRequests() != null) {
+                        String userCf = user != null ? user.getCfHandle() : trimmed;
+                        for (String p : t.getJoinRequests()) {
+                            if (p != null && (p.equalsIgnoreCase(userCf) || p.equalsIgnoreCase(trimmed))) return true;
+                        }
+                    }
+                }
+                return false;
+            }
             p1 = secondary.getPlayer1CFHandle(); p2 = secondary.getPlayer2CFHandle();
             u1 = secondary.getUser1(); u2 = secondary.getUser2();
             id1 = secondary.getPlayer1Id(); id2 = secondary.getPlayer2Id();
@@ -1078,10 +1273,15 @@ public class MatchService {
         msg.setSender(handle);
         msg.setText(cleaned);
 
+        String norm = normalizeCode(inviteCode);
         messagingTemplate.convertAndSend(
-            "/topic/match/" + normalizeCode(inviteCode) + "/chat",
+            "/topic/match/" + norm + "/chat",
             msg
         );
+        if (tournamentService != null && tournamentService.isTournament(inviteCode)) {
+            messagingTemplate.convertAndSend("/topic/tournament/" + inviteCode + "/chat", msg);
+            messagingTemplate.convertAndSend("/topic/tournament/" + norm + "/chat", msg);
+        }
     }
 
     public void sendEmoteMessage(String inviteCode, String senderEmailOrId, String emote) {
@@ -1095,9 +1295,14 @@ public class MatchService {
         msg.setSender(handle);
         msg.setEmote(cleaned);
 
+        String norm = normalizeCode(inviteCode);
         messagingTemplate.convertAndSend(
-            "/topic/match/" + normalizeCode(inviteCode) + "/emotes",
+            "/topic/match/" + norm + "/emotes",
             msg
         );
+        if (tournamentService != null && tournamentService.isTournament(inviteCode)) {
+            messagingTemplate.convertAndSend("/topic/tournament/" + inviteCode + "/emotes", msg);
+            messagingTemplate.convertAndSend("/topic/tournament/" + norm + "/emotes", msg);
+        }
     }
 }

@@ -496,7 +496,7 @@ export default function MatchRoom() {
   // Latest accepted server state + offset between the server clock and this browser's clock.
   const matchRef = useRef(null)
   const clockSkewRef = useRef(0)
-  const [myHandle, setMyHandle]           = useState(null)
+  const [myHandle, setMyHandle]           = useState(() => localStorage.getItem('cfHandle') || null)
   const [myHandleReady, setMyHandleReady] = useState(false)
   const [timeLeft, setTimeLeft]           = useState(null)
   const [loadError, setLoadError]         = useState(null)
@@ -646,7 +646,14 @@ export default function MatchRoom() {
 
   useEffect(() => {
     axiosInstance.get(API_PATHS.USER.ME)
-      .then(r => { setMyHandle(r?.data?.cfHandle || null); setMyHandleReady(true) })
+      .then(r => {
+        const h = r?.data?.cfHandle || r?.data?.codeforcesHandle || null
+        if (h) {
+          setMyHandle(h)
+          localStorage.setItem('cfHandle', h)
+        }
+        setMyHandleReady(true)
+      })
       .catch(() => { setMyHandleReady(true) })
   }, [])
 
@@ -665,6 +672,10 @@ export default function MatchRoom() {
         }
         prevStatusRef.current = data.status
         detectChanges(data)
+        if (data?.tournamentId) {
+          localStorage.setItem('activeTournamentId', data.tournamentId)
+          localStorage.setItem(`tournament_match_${inviteCode}`, data.tournamentId)
+        }
         setMatch(data)
 
         // Sync skip votes from match state so refresh or missed WS messages preserve skip state
@@ -679,7 +690,10 @@ export default function MatchRoom() {
           if (prev && data.problems?.length > 0) setTimeout(() => setShowLoading(false), 600)
           return prev
         })
-        if (data.status === 'FINISHED') navigate(`/results/${inviteCode}`)
+        if (data.status === 'FINISHED') {
+          const tId = data.tournamentId || match?.tournamentId || null
+          navigate(`/results/${inviteCode}`, { state: { tournamentId: tId } })
+        }
       }
     } catch (err) {
       setLoadError(err?.response?.data?.message || err.message || 'Could not load match.')
@@ -845,6 +859,10 @@ export default function MatchRoom() {
               }
               prevStatusRef.current = data.status
               detectChanges(data)
+              if (data?.tournamentId) {
+                localStorage.setItem('activeTournamentId', data.tournamentId)
+                localStorage.setItem(`tournament_match_${normCode}`, data.tournamentId)
+              }
               setMatch(data)
 
               // Sync skip votes from match state
@@ -854,7 +872,10 @@ export default function MatchRoom() {
                 setSkipVoteOpp(iAmUser1 ? !!data.skipVoteUser2 : !!data.skipVoteUser1)
               }
 
-              if (data?.status === 'FINISHED') navigate(`/results/${normCode}`)
+              if (data?.status === 'FINISHED') {
+                const tId = data?.tournamentId || match?.tournamentId || null
+                navigate(`/results/${normCode}`, { state: { tournamentId: tId } })
+              }
             } catch {}
           })
 
@@ -867,7 +888,8 @@ export default function MatchRoom() {
                 if (!prev) setUnreadCount(c => c + 1)
                 return prev
               })
-              if (data.sender !== (myHandle || 'you')) {
+              const fromMe = data.sender === 'you' || (myHandle && data.sender?.trim().toLowerCase() === myHandle.trim().toLowerCase())
+              if (!fromMe) {
                 notify('💬 CF Arena', `${data.sender}: ${data.text}`)
               }
             } catch {}
@@ -902,7 +924,8 @@ export default function MatchRoom() {
             try {
               clearInterval(timerRef.current)
               showToast('Match stopped by creator.')
-              navigate(`/results/${normCode}`)
+              const tId = match?.tournamentId || (normCode ? localStorage.getItem(`tournament_match_${normCode}`) : null)
+              navigate(`/results/${normCode}`, { state: { tournamentId: tId } })
             } catch {}
           })
 
@@ -948,7 +971,10 @@ export default function MatchRoom() {
 
   useEffect(() => {
     if (!match) return
-    if ((match?.curIdx ?? 0) > 5) navigate(`/results/${inviteCode}`)
+    if ((match?.curIdx ?? 0) > 5) {
+      const tId = match.tournamentId || (inviteCode ? localStorage.getItem(`tournament_match_${inviteCode}`) : null)
+      navigate(`/results/${inviteCode}`, { state: { tournamentId: tId } })
+    }
   }, [match, navigate, inviteCode])
 
   const isParticipant1 = myHandle && (
@@ -967,7 +993,8 @@ export default function MatchRoom() {
   const amIUser1 = isSpectator ? true : (isParticipant1 || (navRole === 'host' && !isParticipant2))
   amIUser1Ref.current = amIUser1
 
-  const isHost = isParticipant1 || (!isSpectator && navRole === 'host')
+  const isTournamentMatch = Boolean(match?.tournamentId)
+  const isHost = !isTournamentMatch && (isParticipant1 || (!isSpectator && navRole === 'host'))
   const isGuest = isParticipant2 || (!isSpectator && navRole === 'guest')
 
   const meHandle  = isSpectator ? match?.user1 : (amIUser1 ? match?.user1 : match?.user2)
@@ -1001,13 +1028,21 @@ export default function MatchRoom() {
   const timerUrgent   = timeLeft !== null && timeLeft < 5 * 60 * 1000
   const guestJoined   = match?.user2 != null
   const guestReady    = guestJoined && matchStatus === 'READY'
-  const canClickReady = !isHost && !guestJoined && navRole === 'guest' && !isSpectator
+  const canClickReady = !isTournamentMatch && !isHost && !guestJoined && navRole === 'guest' && !isSpectator
+
+  const isMine = useCallback((sender) => {
+    if (!sender) return false
+    if (sender === 'you') return true
+    if (myHandle && sender.trim().toLowerCase() === myHandle.trim().toLowerCase()) return true
+    return false
+  }, [myHandle])
 
   const dotClass  = isOngoing ? 'live' : matchStatus === 'FINISHED' ? 'done' : 'waiting'
   const statusTxt = !match ? 'Loading…'
     : isSpectator ? (isOngoing ? '👁 Monitoring match — live scores & progress' : '👁 Match finished')
     : isOngoing ? 'Live — match in progress'
     : matchStatus === 'FINISHED' ? 'Match finished'
+    : isTournamentMatch ? 'Competition Match · Waiting for referee to start round…'
     : matchStatus === 'READY' ? 'Both players ready — host can start'
     : 'Waiting for player 2 to join…'
 
@@ -1102,7 +1137,8 @@ export default function MatchRoom() {
       setShowStopModal(false)
       clearInterval(timerRef.current)
       showToast('Match stopped by creator.')
-      navigate(`/results/${inviteCode}`)
+      const tId = match?.tournamentId || (inviteCode ? localStorage.getItem(`tournament_match_${inviteCode}`) : null)
+      navigate(`/results/${inviteCode}`, { state: { tournamentId: tId } })
     } catch (err) {
       showToast(err?.response?.data?.message || 'Failed to stop match.', 'error')
       setIsStopping(false)
@@ -1167,7 +1203,7 @@ export default function MatchRoom() {
               <div className="mr-chat-msgs">
                 {chatMsgs.length === 0 && <div className="mr-chat-empty">No messages yet. Say something!</div>}
                 {chatMsgs.map((m, i) => (
-                  <div key={i} className={`mr-chat-msg ${m.sender === (myHandle || 'you') ? 'mine' : ''}`}>
+                  <div key={i} className={`mr-chat-msg ${isMine(m.sender) ? 'mine' : ''}`}>
                     <span className="mr-chat-sender">{m.sender}</span>
                     <div className="mr-chat-bubble">{m.text}</div>
                   </div>
@@ -1202,7 +1238,10 @@ export default function MatchRoom() {
       )}
 
       <div className="mr">
-        <Navbar onCfSaved={() => showToast('CF handle updated!')} />
+        <Navbar
+          onCfSaved={() => showToast('CF handle updated!')}
+          dashboardTo={match?.tournamentId ? `/tournament/${match.tournamentId}` : '/dashboard'}
+        />
         <main className="mr-main">
           <div className="mr-topbar">
             <div>
@@ -1318,24 +1357,43 @@ export default function MatchRoom() {
               </div>
               <div className="mr-lobby-foot">
                 <div className="mr-hint">
-                  {isSpectator
+                  {isTournamentMatch
+                    ? (isSpectator
+                        ? 'Spectating competition lobby: waiting for tournament referee to start the round.'
+                        : 'Competition Match · The match will start automatically as soon as the tournament host/referee begins the round.')
+                    : isSpectator
                     ? 'Spectating lobby: waiting for players to ready up and host to start.'
                     : isHost
                     ? guestReady ? <>Opponent is ready. <em>Start when you are.</em></> : 'Share the code. Start unlocks once opponent clicks Ready.'
                     : guestJoined ? "You're in. Waiting for host to start." : <>Click <em>Ready Up</em> to signal you're set.</>}
                 </div>
-                {!isSpectator && isHost && (
-                  <button className="mr-btn-primary" onClick={onStart} disabled={!guestReady || isStarting}>
-                    {isStarting ? 'Starting…' : guestReady ? '⚔ Start Match' : 'Awaiting…'}
-                  </button>
-                )}
-                {canClickReady && (
-                  <button className="mr-btn-primary" onClick={onReady} disabled={isReadying}>
-                    {isReadying ? 'Joining…' : '✓ Ready Up'}
-                  </button>
-                )}
-                {!isSpectator && !isHost && navRole !== 'host' && guestJoined && (
-                  <button className="mr-btn-primary" disabled>Waiting for host…</button>
+                {isTournamentMatch ? (
+                  <>
+                    <button className="mr-btn-primary" disabled style={{ opacity: 0.85, cursor: 'default' }}>
+                      ⏳ Waiting for referee to start round
+                    </button>
+                    {isSpectator && match?.tournamentId && (
+                      <button className="mr-btn-primary" onClick={() => navigate(`/tournament/${match.tournamentId}`)}>
+                        🏆 Open Bracket
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {!isSpectator && isHost && (
+                      <button className="mr-btn-primary" onClick={onStart} disabled={!guestReady || isStarting}>
+                        {isStarting ? 'Starting…' : guestReady ? '⚔ Start Match' : 'Awaiting…'}
+                      </button>
+                    )}
+                    {canClickReady && (
+                      <button className="mr-btn-primary" onClick={onReady} disabled={isReadying}>
+                        {isReadying ? 'Joining…' : '✓ Ready Up'}
+                      </button>
+                    )}
+                    {!isSpectator && !isHost && navRole !== 'host' && guestJoined && (
+                      <button className="mr-btn-primary" disabled>Waiting for host…</button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

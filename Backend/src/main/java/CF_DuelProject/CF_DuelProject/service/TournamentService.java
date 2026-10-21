@@ -90,6 +90,56 @@ public class TournamentService {
         return false;
     }
 
+    public boolean isTournament(String identifier) {
+        if (identifier == null || identifier.isBlank()) return false;
+        String trimmed = identifier.trim();
+        return tournamentRepository.findById(trimmed).isPresent()
+                || tournamentRepository.findByInviteCode(trimmed).isPresent()
+                || tournamentRepository.findByInviteCode(MatchService.normalizeCode(trimmed)).isPresent();
+    }
+
+    public boolean canParticipateInTournament(String email, String tournamentId) {
+        if (email == null || tournamentId == null || tournamentId.isBlank()) return false;
+        String trimmed = tournamentId.trim();
+        Tournament t = tournamentRepository.findById(trimmed)
+                .orElseGet(() -> tournamentRepository.findByInviteCode(trimmed)
+                .orElseGet(() -> tournamentRepository.findByInviteCode(MatchService.normalizeCode(trimmed))
+                .orElse(null)));
+        if (t == null) return false;
+
+        String userEmail = email.trim();
+        User user = userRepository.findByEmail(userEmail)
+                .orElseGet(() -> userRepository.findByEmail(userEmail.toLowerCase())
+                .orElseGet(() -> userRepository.findById(userEmail)
+                .orElseGet(() -> userRepository.findByCfHandleIgnoreCase(userEmail)
+                .orElseGet(() -> userRepository.findByCodeforcesHandleIgnoreCase(userEmail)
+                .orElse(null)))));
+
+        if (user != null && user.isAdmin()) return true;
+
+        String cf = user != null ? user.getCfHandle() : userEmail;
+
+        if (isHost(t, cf, userEmail)) return true;
+
+        if (t.getRegisteredPlayers() != null) {
+            for (String p : t.getRegisteredPlayers()) {
+                if (p != null && (p.equalsIgnoreCase(cf) || p.equalsIgnoreCase(userEmail))) {
+                    return true;
+                }
+            }
+        }
+
+        if (t.getJoinRequests() != null) {
+            for (String p : t.getJoinRequests()) {
+                if (p != null && (p.equalsIgnoreCase(cf) || p.equalsIgnoreCase(userEmail))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private void populateCreatorEmailIfMissing(Tournament t) {
         if (t != null && (t.getCreatorEmail() == null || t.getCreatorEmail().isBlank()) && t.getCreatorId() != null) {
             try {
@@ -439,6 +489,15 @@ public class TournamentService {
             lobby.setUser2(player2);
             lobby.setPlayer1CFHandle(player1);
             lobby.setPlayer2CFHandle(player2);
+
+            // Populate player IDs if user records exist
+            userRepository.findByCodeforcesHandleIgnoreCase(player1)
+                    .or(() -> userRepository.findByCfHandleIgnoreCase(player1))
+                    .ifPresent(u -> lobby.setPlayer1Id(u.getId()));
+            userRepository.findByCodeforcesHandleIgnoreCase(player2)
+                    .or(() -> userRepository.findByCfHandleIgnoreCase(player2))
+                    .ifPresent(u -> lobby.setPlayer2Id(u.getId()));
+
             lobby.setDurationMinutes(t.getMatchDurationMinutes());
             lobby.setStatus("READY"); // Both players pre-set
             lobby.setDifficulty(t.getDifficulty());
@@ -468,8 +527,7 @@ public class TournamentService {
 
     // ═══════════════════════════════════════════════════════════
     // START ROUND MATCHES
-    // Called by TournamentScheduler when round time arrives.
-    // Promotes MatchSecondary → MatchPrimary using existing startMatch flow.
+    // Promotes MatchSecondary → MatchPrimary using synchronized tournament match start flow.
     // ═══════════════════════════════════════════════════════════
     public void startRoundMatches(Tournament t, MatchService matchService) {
         int round = t.getCurrentRound();
@@ -484,9 +542,9 @@ public class TournamentService {
                 MatchSecondary lobby = matchRepository2.findByInviteCode(code).orElse(null);
                 if (lobby == null || !"READY".equals(lobby.getStatus())) continue;
 
-                // Use existing startMatch logic — player1 starts the match
-                matchService.startMatch(lobby.getUser1(), code);
-                log.debug("  🚀 Round {} match started: {}", round, code);
+                // Start tournament match with synchronized timing and problem selection
+                matchService.startTournamentMatch(t, code);
+                log.info("  🚀 Round {} match started: {}", round, code);
             } catch (Exception e) {
                 log.error("  ❌ Failed to start match {}: {}", code, e.getMessage());
             }

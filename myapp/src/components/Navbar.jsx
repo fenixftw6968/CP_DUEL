@@ -85,7 +85,7 @@ const navCss = `
   }
 `
 
-export default function Navbar({ onCfSaved }) {
+export default function Navbar({ onCfSaved, dashboardTo = '/dashboard' }) {
   const navigate = useNavigate()
   const { logout } = useContext(AuthContext)
 
@@ -265,7 +265,7 @@ export default function Navbar({ onCfSaved }) {
       <style>{navCss}</style>
 
       <header className="nav">
-        <Link to="/dashboard" className="nav-brand">CF<em>_</em>ARENA</Link>
+        <Link to={dashboardTo} className="nav-brand">CF<em>_</em>ARENA</Link>
         <div className="nav-right">
           <span className="nav-user-pill">{userEmail}</span>
           <button className="nav-btn history" onClick={() => navigate('/history')} title="View match history">
