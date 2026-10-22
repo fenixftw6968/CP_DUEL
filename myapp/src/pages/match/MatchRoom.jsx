@@ -7,8 +7,7 @@ import Navbar from '../../components/Navbar'
 import { celebrateSolve } from './fireworks'
 
 // Strip any accidental /ws suffix — the SockJS URL below appends /ws itself.
-// VITE_WS_URL should be just the base (e.g. https://cfarena.in), NOT https://cfarena.in/ws
-const _RAW_WS_BASE = import.meta.env.VITE_WS_URL || 'http://localhost:8080'
+const _RAW_WS_BASE = import.meta.env.VITE_WS_URL || (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost') ? window.location.origin : 'http://localhost:8080')
 const WS_BASE = _RAW_WS_BASE.replace(/\/ws\/?$/, '')
 
 function toResultsArray(val) {
