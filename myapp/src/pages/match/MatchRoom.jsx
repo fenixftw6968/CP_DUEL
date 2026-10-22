@@ -287,6 +287,19 @@ const css = `
   }
   .mr-state.ac.just-ac { animation:acChipIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards; }
 
+  /* ── Opponent Solved Banner ── */
+  .opp-solved-banner { position:fixed; top:28px; left:50%; transform:translateX(-50%); z-index:9999; pointer-events:none; border-radius:var(--radius-lg); animation:oppBannerIn 0.4s cubic-bezier(0.22,1,0.36,1); box-shadow:0 12px 40px rgba(0,0,0,0.8), 0 0 35px rgba(255,107,107,0.35); }
+  .opp-solved-banner-inner { display:flex; align-items:center; gap:16px; padding:16px 26px 16px 18px; background:#120c10; border:1px solid rgba(255,107,107,0.45); border-left:4px solid var(--danger); border-radius:var(--radius-lg); position:relative; overflow:hidden; white-space:nowrap; }
+  .opp-solved-banner-inner::after { content:''; position:absolute; inset:0; pointer-events:none; background:linear-gradient(90deg,transparent 0%,rgba(255,107,107,0.18) 50%,transparent 100%); background-size:200% 100%; background-position:200% 0; animation:oppBannerScan 1.2s ease-out infinite; }
+  @keyframes oppBannerScan { 0%{background-position:200% 0;} 100%{background-position:-200% 0;} }
+  .opp-solved-banner-icon { width:36px; height:36px; border-radius:50%; background:rgba(255,107,107,0.14); border:1px solid rgba(255,107,107,0.35); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:18px; animation:oppIconPop 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+  @keyframes oppIconPop { from{transform:scale(0) rotate(-45deg);opacity:0} to{transform:scale(1) rotate(0deg);opacity:1} }
+  .opp-solved-banner-text { display:flex; flex-direction:column; gap:3px; }
+  .opp-solved-banner-headline { font-size:14px; font-weight:700; letter-spacing:0.02em; color:#ff8080; display:flex; align-items:center; gap:8px; }
+  .opp-solved-banner-sub { font-size:11px; letter-spacing:0.06em; color:var(--text2); }
+  .opp-solved-banner-sub strong { color:var(--accent); font-weight:600; }
+  @keyframes oppBannerIn { from{opacity:0;transform:translateX(-50%) translateY(-24px) scale(0.92)} to{opacity:1;transform:translateX(-50%) translateY(0) scale(1)} }
+
   /* ── Unlock banner ── */
   .unlock-banner { position:fixed; bottom:72px; left:50%; transform:translateX(-50%); z-index:400; pointer-events:none; border-radius:var(--radius); animation:bannerIn 0.4s cubic-bezier(0.22,1,0.36,1); box-shadow:0 8px 32px rgba(0,0,0,0.7),0 0 32px rgba(200,255,0,0.1); }
   .unlock-banner-inner { display:flex; align-items:center; gap:12px; padding:12px 22px 12px 14px; background:var(--panel3); border:1px solid var(--border2); border-left:3px solid var(--accent); border-radius:var(--radius); position:relative; overflow:hidden; white-space:nowrap; }
@@ -472,6 +485,24 @@ function UnlockBanner({ problemName }) {
   )
 }
 
+function OpponentSolvedBanner({ problemLabel }) {
+  return (
+    <div className="opp-solved-banner">
+      <div className="opp-solved-banner-inner">
+        <div className="opp-solved-banner-icon">⚔️</div>
+        <div className="opp-solved-banner-text">
+          <span className="opp-solved-banner-headline">
+            Your opponent has completed this question! Move to the next question.
+          </span>
+          <span className="opp-solved-banner-sub">
+            {problemLabel ? `${problemLabel} solved · ` : ''}<strong>Proceed to the next question immediately</strong> to avoid losing time!
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // The backend is authoritative. A delayed WebSocket frame (or a slow poll response) must never roll the UI back
 // to an earlier state, so updates that are older than what is already shown are dropped.
 const STATUS_RANK = { WAITING: 0, READY: 1, ONGOING: 2, FINISHING: 2, FINISHED: 3 }
@@ -527,6 +558,7 @@ export default function MatchRoom() {
   const [scorePopMe,       setScorePopMe]       = useState(false)
   const [scorePopOpp,      setScorePopOpp]      = useState(false)
   const [unlockBanner,     setUnlockBanner]     = useState(null)
+  const [oppSolvedBanner,  setOppSolvedBanner]  = useState(null)
 
   // ── Skip vote state ──────────────────────────────────────
   const [skipVoteMe,  setSkipVoteMe]  = useState(false)
@@ -616,9 +648,16 @@ export default function MatchRoom() {
       celebrateSolve()
     }
 
-    // 🔔 Desktop notification when opponent solves
+    // 🔔 Real-time popup notification and desktop notification when opponent completes/solves question
     if (oppNewSolves.length > 0) {
       const probs = Array.isArray(data?.problems) ? data.problems : []
+      const latestSolvedIdx = oppNewSolves[oppNewSolves.length - 1]
+      const solvedProblemLabel = parseProblem(probs[latestSolvedIdx], latestSolvedIdx).fullLabel
+      setOppSolvedBanner(solvedProblemLabel)
+      setTimeout(() => {
+        setOppSolvedBanner(null)
+      }, 5000)
+
       oppNewSolves.forEach(idx => {
         const pLabel = `Problem ${idx + 1}`
         const s1 = iAmUser1 ? (data?.score1 ?? 0) : (data?.score2 ?? 0)
@@ -1149,6 +1188,7 @@ export default function MatchRoom() {
     <>
       <style>{css}</style>
       {showLoading && <LoadingScreen />}
+      {oppSolvedBanner && <OpponentSolvedBanner problemLabel={oppSolvedBanner} />}
       {unlockBanner && <UnlockBanner problemName={unlockBanner} />}
 
       {/* ── Stop Match Confirmation Modal ── */}
